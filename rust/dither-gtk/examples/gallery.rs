@@ -9,11 +9,11 @@ use std::{
 };
 
 fn panel(title: &str, child: &impl IsA<gtk::Widget>) -> gtk::Box {
-    let panel = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    panel.add_css_class("card");
-    let label = gtk::Label::new(Some(title));
+    let panel = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    panel.add_css_class("dither-card");
+    let label = gtk::Label::new(Some(&title.to_uppercase()));
     label.set_xalign(0.0);
-    label.add_css_class("heading");
+    label.add_css_class("dither-label");
     panel.append(&label);
     panel.append(child);
     panel
@@ -183,94 +183,102 @@ fn activate(app: &gtk::Application, screenshot: Option<String>) {
             .expect("GTK settings")
             .set_gtk_enable_animations(false);
     }
-    let css = gtk::CssProvider::new();
-    css.load_from_data("window, .gallery { background: #10151d; color: #edf3ff; } .card { background: #192230; border-radius: 12px; padding: 14px; } .heading { font-weight: bold; font-size: 16px; } .tooltip { background: #080d14; color: white; padding: 6px; border-radius: 4px; } button { color: white; background: #29374b; background-image: none; } label { color: #edf3ff; }");
     if let Some(display) = gtk::gdk::Display::default() {
-        gtk::style_context_add_provider_for_display(
-            &display,
-            &css,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
+        install_future_retro_css(&display);
     }
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("Dither Kit · GTK4")
+        .title("DitherKit · GTK4")
         .default_width(1120)
-        .default_height(1050)
+        .default_height(1180)
         .build();
+    window.add_css_class("dither-void");
     let content = gtk::Box::new(gtk::Orientation::Vertical, 16);
-    content.set_margin_top(20);
-    content.set_margin_bottom(20);
-    content.set_margin_start(20);
-    content.set_margin_end(20);
-    let title = gtk::Label::new(Some("DITHER KIT / Native GTK4"));
+    content.set_margin_top(24);
+    content.set_margin_bottom(24);
+    content.set_margin_start(24);
+    content.set_margin_end(24);
+    let eyebrow = gtk::Label::new(Some("DITHERKIT · GTK4"));
+    eyebrow.set_xalign(0.0);
+    eyebrow.add_css_class("dither-label");
+    content.append(&eyebrow);
+    let title = gtk::Label::new(Some("Rendered by machine, in one blue"));
     title.set_xalign(0.0);
-    title.add_css_class("title-1");
+    title.add_css_class("dither-title");
     content.append(&title);
     let subtitle = gtk::Label::new(Some(
-        "Shader pixels. Native controls. Hover charts and toggle their legends.",
+        "Shader pixels on a 3-pixel grid. Native controls around them. Hover the charts and toggle their legends.",
     ));
     subtitle.set_xalign(0.0);
     content.append(&subtitle);
     let mut surfaces = vec![];
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     row.set_homogeneous(true);
     let gradient = DitherGradient::new(Gradient {
-        to: Some(Tone::Pink),
+        to: Some(Tone::Ink),
         direction: Direction::Right,
-        ..Gradient::new(Tone::Blue)
+        ..Gradient::new(Tone::Near)
     });
     gradient.widget().set_size_request(240, 90);
     surfaces.push(gradient.surface().clone());
-    row.append(&panel("Gradient", gradient.widget()));
-    let background = DitherBackground::new(Background::new(Field::Aurora, Tone::Green));
+    row.append(&panel("Gradient · blue to ink", gradient.widget()));
+    let background = DitherBackground::new(Background::new(Field::Clouds, Tone::Near));
     background.widget().set_size_request(240, 90);
     surfaces.push(background.surface().clone());
-    row.append(&panel("Animated background", background.widget()));
+    row.append(&panel("Clouds · hover to quicken", background.widget()));
     content.append(&row);
     let series = vec![
         Series::new(
-            "Requests",
-            Tone::Green,
+            "Inference",
+            Tone::Near,
             vec![12., 23., 18., 37., 28., 46., 39.],
         ),
         Series::new(
-            "Responses",
-            Tone::Blue,
+            "Training",
+            Tone::Ink,
             vec![8., 12., 15., 24., 18., 30., 34.],
         )
         .fill(Fill::Hatched),
     ];
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     row.set_homogeneous(true);
     for (title, kind) in [
         ("Area", CartesianKind::Area),
         ("Line", CartesianKind::Line),
-        ("Bar", CartesianKind::Bar),
+        ("Dot matrix", CartesianKind::Bar),
     ] {
-        let mut options = ChartOptions::new(kind, series.clone());
+        let series = if kind == CartesianKind::Bar {
+            series
+                .iter()
+                .cloned()
+                .map(|s| s.fill(Fill::Matrix))
+                .collect()
+        } else {
+            series.clone()
+        };
+        let mut options = ChartOptions::new(kind, series);
         options.x_labels = vec!["Mon".into(), "Thu".into(), "Sun".into()];
         let chart = DitherChart::new(options);
         surfaces.push(chart.surface().clone());
         row.append(&panel(title, chart.widget()));
     }
     content.append(&row);
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     row.set_homogeneous(true);
     let pie = DitherPie::new(
         vec![
-            Slice::new("Compute", 42., Tone::Green),
-            Slice::new("Storage", 33., Tone::Blue),
-            Slice::new("Network", 25., Tone::Pink),
+            Slice::new("Compute", 42., Tone::Near),
+            Slice::new("Storage", 33., Tone::Ink).fill(Fill::Dotted),
+            Slice::new("Network", 25., Tone::Near).fill(Fill::Matrix),
         ],
         0.5,
     );
     surfaces.push(pie.surface().clone());
-    row.append(&panel("Pie", pie.widget()));
+    row.append(&panel("Allocation · donut", pie.widget()));
     let radar = DitherRadar::new(
         vec![
-            Series::new("Current", Tone::Purple, vec![8., 6., 9., 5., 7.]),
-            Series::new("Target", Tone::Blue, vec![6., 8., 7., 9., 5.]),
+            Series::new("Current", Tone::Near, vec![8., 6., 9., 5., 7.]),
+            Series::new("Target", Tone::Ink, vec![6., 8., 7., 9., 5.]).fill(Fill::Dotted),
         ],
         vec![
             "Speed".into(),
@@ -283,31 +291,35 @@ fn activate(app: &gtk::Application, screenshot: Option<String>) {
     surfaces.push(radar.surface().clone());
     row.append(&panel("Radar", radar.widget()));
     let small = gtk::Box::new(gtk::Orientation::Vertical, 16);
-    let spark = DitherSparkline::new(vec![4., 8., 5., 12., 9., 16., 14.], Tone::Green);
+    let spark = DitherSparkline::new(vec![4., 8., 5., 12., 9., 16., 14.], Tone::Near);
     spark.widget().set_size_request(220, 60);
     surfaces.push(spark.surface().clone());
     small.append(&panel("Sparkline", spark.widget()));
-    let meter = DitherMeter::new(0.42, Tone::Blue, Fill::Gradient);
+    let meter = DitherMeter::new(0.42, Tone::Near, Fill::Matrix);
     surfaces.push(meter.surface().clone());
-    small.append(&panel("Spring meter", meter.widget()));
+    small.append(&panel("Meter · eased, never sprung", meter.widget()));
     let avatars = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    for name in ["Dither", "Native", "GTK"] {
-        let avatar = DitherAvatar::new(name, 48, None);
+    for (name, tone) in [
+        ("Dither", Tone::Near),
+        ("Native", Tone::Ink),
+        ("GTK", Tone::Near),
+    ] {
+        let avatar = DitherAvatar::with_tone(name, 48, tone);
         surfaces.push(avatar.surface().clone());
         avatars.append(avatar.widget());
     }
     small.append(&panel("Avatars", &avatars));
     row.append(&small);
     content.append(&row);
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    buttons.set_homogeneous(true);
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 14);
+    buttons.set_halign(gtk::Align::Start);
     for (name, style) in [
-        ("Solid", ButtonStyle::Solid),
-        ("Outline", ButtonStyle::Outline),
+        ("Update meter", ButtonStyle::Solid),
+        ("Secondary", ButtonStyle::Outline),
         ("Ghost", ButtonStyle::Ghost),
     ] {
-        let button = DitherButton::new(name, Tone::Green, style);
-        surfaces.push(button.surface().clone());
+        // Future-Retro buttons are flat native chrome; no surface to wait for.
+        let button = DitherButton::new(name, Tone::Near, style);
         let meter = meter.clone();
         let next = Cell::new(false);
         button.widget().connect_clicked(move |_| {
@@ -317,12 +329,18 @@ fn activate(app: &gtk::Application, screenshot: Option<String>) {
         });
         buttons.append(button.widget());
     }
-    content.append(&panel("Buttons · click to update meter", &buttons));
+    content.append(&panel("Buttons · click to update the meter", &buttons));
+    let footer = gtk::Label::new(Some(
+        "NEAR AI BLUE ON VOID · 3-PIXEL CELLS · 24 FPS · ANIMATIONS OFF HOLDS A STILL FRAME",
+    ));
+    footer.set_xalign(0.0);
+    footer.add_css_class("dither-label");
+    content.append(&footer);
     let scroll = gtk::ScrolledWindow::builder()
         .child(&content)
         .hscrollbar_policy(gtk::PolicyType::Never)
         .build();
-    scroll.add_css_class("gallery");
+    scroll.add_css_class("dither-void");
     window.set_child(Some(&scroll));
     window.present();
     if let Some(path) = screenshot {

@@ -39,7 +39,7 @@ public sealed class Pie(IReadOnlyList<Slice> slices)
         var table = Slices.SelectMany((s, i) => new[] { geo.Angles[i].Start, geo.Angles[i].End, s.Tone.Hue, s.Tone.Chroma, (float)s.Fill });
         var off = p.Table(table);
         p.Push(Op.Pie, geo.Center.X, geo.Center.Y, geo.Radius, geo.Inner, Slices.Count > 1 ? 1 : 0, Hover ?? -1, Slices.Count, off);
-        Bloom.Emit(p); return p;
+        Bloom.Emit(p, Slices.Any(s => s.Tone.IsRamp)); return p;
     }
 }
 public sealed record RadarGeometry((float X, float Y) Center, float Radius, IReadOnlyList<(float X, float Y)> AxisTips);
@@ -73,12 +73,14 @@ public sealed class Radar(IReadOnlyList<Series> series)
             var (tx, ty) = geo.AxisTips[i % n];
             return (Numeric.Round(geo.Center.X + (tx - geo.Center.X) * f), Numeric.Round(geo.Center.Y + (ty - geo.Center.Y) * f));
         }
+        var ramp = Series.Any(s => s.Tone.IsRamp);
+        var (ringColor, ringDash, spokeDash) = ramp ? (Encoder.Rule(), 2u, 2u) : (Encoder.Guide(), 2u, 3u);
         for (var ring = 1; ring <= Math.Max(Rings, 1); ring++)
         {
             var f = (float)ring / Math.Max(Rings, 1);
-            for (var i = 0; i < n; i++) p.Line(At(i, f), At(i + 1, f), Encoder.Guide(), 2);
+            for (var i = 0; i < n; i++) p.Line(At(i, f), At(i + 1, f), ringColor, ringDash);
         }
-        for (var i = 0; i < n; i++) p.Line(center, At(i, 1), Encoder.Guide(), 3);
+        for (var i = 0; i < n; i++) p.Line(center, At(i, 1), ringColor, spokeDash);
         var max = Max ?? Scale.Nice(Series.SelectMany(s => s.Values).Prepend(0).Max(), Rings).Max;
         var prog = Numeric.Clamp(Progress);
         for (var si = 0; si < Series.Count; si++)
@@ -101,6 +103,6 @@ public sealed class Radar(IReadOnlyList<Series> series)
             }
             foreach (var pt in pts) p.Dot(Numeric.Round(pt.X), Numeric.Round(pt.Y), stroke, s.Tone.Shade(.97f).Fade(alpha));
         }
-        Bloom.Emit(p); return p;
+        Bloom.Emit(p, ramp); return p;
     }
 }

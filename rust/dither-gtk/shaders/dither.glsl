@@ -27,6 +27,9 @@ out vec4 fragColor;
 
 const int DATA_W = 1024;
 const float TAU = 6.28318530717958647692;
+const float PI = 3.14159265358979323846;
+// Future-Retro field units per grid cell (3-point cells, 160 points per unit).
+const float LIGHT_SCALE = 0.01875;
 const float NONE = -1.0e9;
 const vec4 EMPTY = vec4(0.0, 0.0, 0.0, -1.0);
 
@@ -52,6 +55,14 @@ const int BAYER8[64] = int[64](
     62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37,
     63, 31, 55, 23, 61, 29, 53, 21);
 const int HALFTONE4[16] = int[16](12, 5, 6, 13, 4, 0, 1, 7, 11, 3, 2, 8, 15, 10, 9, 14);
+
+// Future-Retro ramps (nearai/future-retro brand/tokens/tokens.css).
+const vec4 NEAR_RAMP[4] = vec4[4](vec4(3.0, 92.0, 163.0, 255.0), vec4(0.0, 145.0, 253.0, 255.0), vec4(131.0, 220.0, 255.0, 255.0), vec4(250.0, 250.0, 247.0, 255.0));
+const vec4 INK_RAMP[4] = vec4[4](vec4(38.0, 38.0, 43.0, 255.0), vec4(128.0, 128.0, 136.0, 255.0), vec4(193.0, 193.0, 193.0, 255.0), vec4(250.0, 250.0, 247.0, 255.0));
+const vec4 SLATE = vec4(38.0, 38.0, 43.0, 255.0);
+const vec4 MARBLE = vec4(250.0, 250.0, 247.0, 255.0);
+const vec4 NEAR_BLUE_INK = vec4(3.0, 92.0, 163.0, 255.0);
+const vec4 FAINT = vec4(193.0, 193.0, 193.0, 23.0);
 
 float D(int i) { return texelFetch(uData, ivec2(i % DATA_W, i / DATA_W), 0).r; }
 int DI(int i) { return int(D(i)); }
@@ -83,14 +94,26 @@ float threshold(int m, int x, int y) {
 
 bool on(int m, int x, int y, float i) { return i > threshold(m, x, y); }
 
-bool covers(int fill, int x, int y, float i) {
+// Coverage: -1 when uncovered, else the pixel's rank among covered pixels.
+float cover(int fill, int x, int y, float i) {
     if (fill == 1) {
-        return emod(x, 2) == 0 && emod(y + emod(x / 2, 2), 2) == 0 && on(1, x / 2, y / 2, i * 1.4);
+        if (emod(x, 2) == 0 && emod(y + emod(x / 2, 2), 2) == 0) {
+            float t = threshold(1, x / 2, y / 2), k = i * 1.4;
+            if (k > t) return t / k;
+        }
+        return -1.0;
     }
-    if (fill == 2) return emod(x + y, 3) == 0 && on(1, x, y, 0.25 + i);
-    if (fill == 3) return i > 0.02;
-    return on(2, x, y, i);
+    if (fill == 2) {
+        float t = threshold(1, x, y), k = 0.25 + i;
+        return (emod(x + y, 3) == 0 && k > t) ? t / k : -1.0;
+    }
+    if (fill == 3) return i > 0.02 ? threshold(1, x, y) : -1.0;
+    if (fill == 4) return (emod(x, 2) == 0 && emod(y, 2) == 0 && i > 0.02) ? threshold(1, x / 2, y / 2) : -1.0;
+    float t = threshold(2, x, y);
+    return i > t ? t / i : -1.0;
 }
+
+bool covers(int fill, int x, int y, float i) { return cover(fill, x, y, i) >= 0.0; }
 
 // ---- color ------------------------------------------------------------------
 
@@ -132,6 +155,23 @@ vec4 shade(float hue, float chroma, float level) {
 
 vec4 fade(vec4 c, float f) { return vec4(c.rgb, rnd(c.a * clamp(f, 0.0, 1.0))); }
 
+vec4 rampColor(int id, int step) {
+    if (step < 1 || step > 4) return SLATE;
+    return id == 2 ? INK_RAMP[step - 1] : NEAR_RAMP[step - 1];
+}
+
+// Upstream tones ignore u; a ramp (negative chroma) dithers between steps.
+vec4 shadeAt(float hue, float chroma, float level, float u) {
+    if (chroma >= 0.0) return shade(hue, chroma, level);
+    float p = clamp(1.0 + (level - 0.3) * 4.0, 1.0, 4.0);
+    float s = floor(p);
+    int step = int(s) + (u < p - s ? 1 : 0);
+    return rampColor(int(-chroma), min(step, 4));
+}
+
+// 12% white mixed in: the Future-Retro hover fill.
+vec4 lift(vec4 c) { return vec4(rnd(c.r + (255.0 - c.r) * 0.12), rnd(c.g + (255.0 - c.g) * 0.12), rnd(c.b + (255.0 - c.b) * 0.12), rnd(c.a + (255.0 - c.a) * 0.12)); }
+
 vec4 colorAt(int i) { return vec4(D(i), D(i + 1), D(i + 2), D(i + 3)); }
 
 // ---- geometry helpers ---------------------------------------------------------
@@ -168,6 +208,44 @@ float valueNoise(float x, float y) {
     float top = n00 + (n10 - n00) * sx;
     float bot = n01 + (n11 - n01) * sx;
     return top + (bot - top) * sy;
+}
+
+float fbm(float x, float y, int octaves) {
+    float s = 0.0, amp = 0.5, f = 1.0, n = 0.0;
+    for (int k = 0; k < 4; k++) {
+        if (k >= octaves) break;
+        s += amp * valueNoise(x * f, y * f);
+        n += amp;
+        amp *= 0.5;
+        f *= 2.03;
+    }
+    return s / n;
+}
+
+// Future-Retro fields: 5 clouds, 6 marble, 7 rings, 8 caustics.
+float lightField(int f, int x, int y, int w, int h, float t) {
+    float fx = float(x) * LIGHT_SCALE, fy = float(y) * LIGHT_SCALE;
+    float v;
+    if (f == 6) {
+        float n = fbm(fx * 0.8 + t * 0.06, fy * 0.8 - t * 0.03, 4);
+        v = 0.5 + 0.42 * sin((fx * 0.8 + fy * 0.35 + n * 4.2 + t * 0.35) * PI);
+    } else if (f == 7) {
+        float dx = (float(x) - float(w) * 0.5) * LIGHT_SCALE;
+        float dy = (float(y) - float(h) * 0.5) * LIGHT_SCALE;
+        float d = sqrt(dx * dx + dy * dy);
+        v = 0.5 + 0.45 * sin(d * 7.0 - t * 2.2 + fbm(fx, fy, 2) * 3.2);
+    } else if (f == 8) {
+        float n = fbm(fx * 0.9 + t * 0.12, fy * 0.9 - t * 0.08, 3);
+        float sa = abs(sin((fx * 1.3 + n * 3.1 + t * 0.4) * PI));
+        float sb = abs(sin((fy * 1.1 - n * 2.7 - t * 0.3) * PI));
+        float k = 1.0 - sa * sb;
+        float k2 = k * k;
+        v = 0.12 + k2 * k2 * k2 * k * 0.95;
+    } else {
+        v = fbm(fx + t * 0.31, fy - t * 0.17, 3) * 0.7 + valueNoise(fx * 2.1 - t * 0.23, fy * 2.1 + t * 0.19) * 0.3;
+        v = 0.5 + (v - 0.5) * 1.9;
+    }
+    return clamp((0.5 + (v - 0.5) * 1.3) * 1.25, 0.0, 1.0);
 }
 
 float field(int f, float u, float v, float t) {
@@ -232,8 +310,9 @@ vec4 evalOp(int i, int tb, int x, int y, vec4 cur) {
         if (y < int(ceil(top)) + 1 || y > int(bottom)) return EMPTY;
         float span = float(h - 1) - top;
         float t = 1.0 - (float(y) - top) / max(span, 1.0);
-        if (!covers(DI(a + 3), x, y, (0.1 + 0.9 * t) * D(a + 6))) return EMPTY;
-        return fade(shade(D(a + 4), D(a + 5), 0.32 + 0.4 * t), D(a + 7));
+        float u = cover(DI(a + 3), x, y, (0.1 + 0.9 * t) * D(a + 6));
+        if (u < 0.0) return EMPTY;
+        return fade(shadeAt(D(a + 4), D(a + 5), 0.32 + 0.4 * t, u), D(a + 7));
     }
     if (code == OP_AREA_STROKE) {
         int off = DI(a), w = DI(a + 1);
@@ -252,12 +331,21 @@ vec4 evalOp(int i, int tb, int x, int y, vec4 cur) {
         int bx0 = DI(a), bx1 = DI(a + 1), bottom = DI(a + 3), h = DI(a + 4);
         float top = D(a + 2);
         int ty = int(rnd(top));
-        if (x < bx0 || x > max(bx1, bx0) || y < ty || y > bottom) return EMPTY;
+        if (x < bx0 || x > max(bx1, bx0) || y > bottom) return EMPTY;
+        if (DI(a + 5) == 4) {
+            // Dot matrix: lit from the axis, unlit dots a faint grid above.
+            if (emod(x - bx0, 2) != 0 || emod(h - 1 - y, 2) != 0) return EMPTY;
+            if (y < ty) return FAINT;
+            float s = float(bottom - y + 1) / float(max(bottom - ty + 1, 1));
+            float u = threshold(1, (x - bx0) / 2, (h - 1 - y) / 2);
+            return fade(shadeAt(D(a + 6), D(a + 7), 0.3 + 0.55 * s, u), D(a + 8));
+        }
+        if (y < ty) return EMPTY;
         float t = 1.0 - (float(y) - top) / max(float(h - 1) - top, 1.0);
-        bool lit = y == ty || covers(DI(a + 5), x, y, 0.3 + 0.7 * t);
-        if (!lit) return EMPTY;
+        float u = y == ty ? threshold(1, x, y) : cover(DI(a + 5), x, y, 0.3 + 0.7 * t);
+        if (u < 0.0) return EMPTY;
         float level = y == ty ? 0.82 : 0.32 + 0.38 * t;
-        return fade(shade(D(a + 6), D(a + 7), level), D(a + 8));
+        return fade(shadeAt(D(a + 6), D(a + 7), level, u), D(a + 8));
     }
     if (code == OP_PIE) {
         float cx = D(a), cy = D(a + 1), radius = D(a + 2), inner = D(a + 3);
@@ -280,8 +368,9 @@ vec4 evalOp(int i, int tb, int x, int y, vec4 cur) {
         float dim = (hover >= 0 && hover != idx) ? 0.5 : 1.0;
         float t = clamp((r - inner) / max(outer - inner, 1.0), 0.0, 1.0);
         bool rim = outer - r < 1.2;
-        if (rim || covers(DI(row + 4), x, y, 0.3 + 0.7 * t)) {
-            return fade(shade(D(row + 2), D(row + 3), rim ? 0.8 : 0.3 + 0.4 * t), dim);
+        float u = rim ? threshold(1, x, y) : cover(DI(row + 4), x, y, 0.3 + 0.7 * t);
+        if (u >= 0.0) {
+            return fade(shadeAt(D(row + 2), D(row + 3), rim ? 0.8 : 0.3 + 0.4 * t, u), dim);
         }
         return EMPTY;
     }
@@ -299,8 +388,9 @@ vec4 evalOp(int i, int tb, int x, int y, vec4 cur) {
         }
         if (!inside) return EMPTY;
         float d = sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy)) / radius;
-        if (!covers(DI(a + 3), x, y, 0.2 + 0.55 * d)) return EMPTY;
-        return fade(shade(D(a + 4), D(a + 5), 0.32 + 0.35 * d), D(a + 6));
+        float u = cover(DI(a + 3), x, y, 0.2 + 0.55 * d);
+        if (u < 0.0) return EMPTY;
+        return fade(shadeAt(D(a + 4), D(a + 5), 0.32 + 0.35 * d, u), D(a + 6));
     }
     if (code == OP_GRADIENT) {
         int w = DI(a), h = DI(a + 1), dir = DI(a + 2), m = DI(a + 3);
@@ -311,25 +401,41 @@ vec4 evalOp(int i, int tb, int x, int y, vec4 cur) {
             bool second = on(m, x, y, pos);
             float th = second ? D(a + 8) : D(a + 5);
             float tc = second ? D(a + 9) : D(a + 6);
-            return on(m, x + 3, y + 5, density * (0.55 + 0.45 * pos)) ? shade(th, tc, 0.35 + 0.35 * pos) : EMPTY;
+            float t2 = threshold(m, x + 3, y + 5), k2 = density * (0.55 + 0.45 * pos);
+            return k2 > t2 ? shadeAt(th, tc, 0.35 + 0.35 * pos, t2 / k2) : EMPTY;
         }
-        return on(m, x, y, (1.0 - pos) * density) ? shade(D(a + 5), D(a + 6), 0.3 + 0.4 * (1.0 - pos)) : EMPTY;
+        float t = threshold(m, x, y), k = (1.0 - pos) * density;
+        return k > t ? shadeAt(D(a + 5), D(a + 6), 0.3 + 0.4 * (1.0 - pos), t / k) : EMPTY;
     }
     if (code == OP_BACKGROUND) {
         int w = DI(a), h = DI(a + 1), f = DI(a + 2), m = DI(a + 3);
         float density = D(a + 4), time = D(a + 5);
         if (x >= w || y >= h) return EMPTY;
-        float u = float(x) / float(max(w, 1)), v = float(y) / float(max(h, 1));
-        float it = smooth01(0.18, 0.82, field(f, u, v, time));
-        if (!on(m, x, y, it * density)) return EMPTY;
+        float it;
+        if (f >= 5) {
+            it = lightField(f, x, y, w, h, time);
+        } else {
+            float u = float(x) / float(max(w, 1)), v = float(y) / float(max(h, 1));
+            it = smooth01(0.18, 0.82, field(f, u, v, time));
+        }
+        float t = threshold(m, x, y), k = it * density;
+        if (!(k > t)) return EMPTY;
         bool accent = DI(a + 8) != 0 && on(1, x + 1, y + 2, (it - 0.62) * 2.2);
-        return accent ? shade(D(a + 9), D(a + 10), 0.3 + 0.5 * it) : shade(D(a + 6), D(a + 7), 0.3 + 0.5 * it);
+        float level = f >= 5 ? 0.3 + 0.42 * it : 0.3 + 0.5 * it;
+        return accent ? shadeAt(D(a + 9), D(a + 10), level, t / k) : shadeAt(D(a + 6), D(a + 7), level, t / k);
     }
     if (code == OP_BUTTON) {
         int w = DI(a), h = DI(a + 1), style = DI(a + 2);
         float density = D(a + 3), time = D(a + 4), th = D(a + 5), tc = D(a + 6);
         if (x >= w || y >= h) return EMPTY;
         bool edge = x == 0 || y == 0 || x + 1 == w || y + 1 == h;
+        if (tc < 0.0) {
+            // Future-Retro buttons are flat: no texture, checker or sparkles.
+            vec4 base = rampColor(int(-tc), 2);
+            if (style == 0) return density > 0.4 ? lift(base) : base;
+            if (style == 1) return (edge || density > 0.0) ? MARBLE : EMPTY;
+            return EMPTY;
+        }
         vec4 c = EMPTY;
         if (edge && style != 2) {
             if ((x + y) % 2 == 0 || style == 0) c = shade(th, tc, 0.6);
@@ -353,10 +459,22 @@ vec4 evalOp(int i, int tb, int x, int y, vec4 cur) {
         float value = D(a + 2);
         if (x >= w || y >= h) return EMPTY;
         int filled = int(rnd(clamp(value, 0.0, 1.0) * float(w)));
+        float th = D(a + 4), tc = D(a + 5);
+        if (fill == 4) {
+            if (emod(x, 2) != 0 || emod(y, 2) != 0) return EMPTY;
+            if (x < filled) {
+                float s = float(x + 1) / float(max(filled, 1));
+                return shadeAt(th, tc, 0.3 + 0.55 * s, threshold(1, x / 2, y / 2));
+            }
+            return FAINT;
+        }
         if (x < filled) {
             float it = 0.35 + 0.65 * (float(x) + 1.0) / float(max(filled, 1));
-            return (covers(fill, x, y, it) || x + 1 == filled) ? shade(D(a + 4), D(a + 5), 0.4 + 0.35 * it) : EMPTY;
+            float u = cover(fill, x, y, it);
+            if (u >= 0.0 || x + 1 == filled) return shadeAt(th, tc, 0.4 + 0.35 * it, u >= 0.0 ? u : threshold(1, x, y));
+            return EMPTY;
         }
+        if (tc < 0.0) return (emod(x, 2) == 0 && emod(y, 2) == 0) ? FAINT : EMPTY;
         if ((x + y) % 4 == 0) return fade(shade(260.0, 0.012, 0.35), 0.6);
         return EMPTY;
     }
@@ -368,9 +486,15 @@ vec4 evalOp(int i, int tb, int x, int y, vec4 cur) {
         int i = mirrorX ? y * 4 + (x < 4 ? x : 7 - x) : (y < 4 ? y : 7 - y) * 8 + x;
         bool lit = ((bits >> uint(i)) & 1u) == 1u;
         bool accent = lit && ((acc >> uint(i % 23)) & 1u) == 1u && ((acc >> uint((i + 7) % 23)) & 1u) == 1u;
-        return shade(D(a + 3), 0.19, accent ? 0.92 : (lit ? 0.62 : 0.16));
+        float hue = D(a + 3);
+        if (hue < 0.0) {
+            int id = int(-hue);
+            return accent ? rampColor(id, 3) : (lit ? rampColor(id, 2) : SLATE);
+        }
+        return shade(hue, 0.19, accent ? 0.92 : (lit ? 0.62 : 0.16));
     }
     if (code == OP_SWATCH) {
+        if (D(a + 1) < 0.0) return shadeAt(D(a), D(a + 1), 0.6, threshold(1, x, y));
         return shade(D(a), D(a + 1), (x + y) % 2 == 0 ? 0.72 : 0.48);
     }
     return EMPTY;
@@ -415,6 +539,7 @@ vec4 postPixel(int x, int y) {
     if (b < end) {
         int radius = DI(b + 2);
         float strength = D(b + 3);
+        bool rampGlow = DI(b + 1) >= 5 && D(b + 4) == 1.0;
         if (cur.a < 0.0 && radius > 0) {
             bool done = false;
             for (int d = 1; d <= 4; d++) {
@@ -426,7 +551,7 @@ vec4 postPixel(int x, int y) {
                         vec4 c = lookupBase(x + ox, y + oy);
                         if (c.a > 160.0) {
                             float glow = strength * (1.0 - (float(d) - 1.0) / float(radius));
-                            if (on(1, x, y, glow)) cur = fade(c, 0.35 + 0.25 * glow);
+                            if (on(1, x, y, glow)) cur = rampGlow ? NEAR_BLUE_INK : fade(c, 0.35 + 0.25 * glow);
                             done = true;
                             break;
                         }

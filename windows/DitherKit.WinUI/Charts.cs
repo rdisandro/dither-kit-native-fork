@@ -14,7 +14,9 @@ public sealed class DitherChart : DitherView
     private readonly Grid plot = new();
     private readonly Canvas yAxis = new();
     private readonly Canvas xAxis = new() { Height = 28 };
-    private readonly TextBlock tooltip = new() { Padding = new Thickness(8), Visibility = Visibility.Collapsed, IsHitTestVisible = false };
+    // A Terminal-window tooltip: macOS Terminal greys, mono text.
+    private readonly TextBlock tooltip = new() { Padding = new Thickness(9, 6, 9, 6), Visibility = Visibility.Collapsed, IsHitTestVisible = false,
+        FontFamily = FutureRetro.Mono, FontSize = 11.5, Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 0xE4, 0xE4, 0xE6)) };
     public DitherLegend Legend { get; } = new();
     private int hover = -1;
     public IReadOnlyList<string> Labels { get; set; } = [];
@@ -82,14 +84,14 @@ public sealed class DitherChart : DitherView
     protected override void RefreshChrome()
     {
         var rows = ChromeData.Rows(Properties, "series");
-        Legend.SetItems(rows.Select((r, i) => (ChromeData.Text(r, "label"), ChromeData.Text(r, "tone", "blue"), !ChromeData.IsHidden(r))));
+        Legend.SetItems(rows.Select((r, i) => (ChromeData.Text(r, "label"), ChromeData.Text(r, "tone", "near"), !ChromeData.IsHidden(r))));
         yAxis.Children.Clear();
         var model = Model(); var scale = model.Scale();
         int gridHeight = Math.Max(1, (int)(Surface.ActualHeight / Cell));
         int gridWidth = Math.Max(1, (int)(Surface.ActualWidth / Cell));
         foreach (double tick in scale.Ticks)
         {
-            var label = new TextBlock { Text = DitherKit.IR.Encoder.FormatValue(tick), FontSize = 11 };
+            var label = new TextBlock { Text = DitherKit.IR.Encoder.FormatValue(tick), FontSize = 10, FontFamily = FutureRetro.Mono, Foreground = FutureRetro.Pewter };
             label.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
             Canvas.SetTop(label, scale.Y(tick, gridHeight) * Cell - label.DesiredSize.Height / 2);
             Canvas.SetLeft(label, Math.Max(0, 40 - label.DesiredSize.Width));
@@ -99,7 +101,7 @@ public sealed class DitherChart : DitherView
         int count = model.Length;
         for (int i = 0; i < count; i++)
         {
-            var label = new TextBlock { Text = i < Labels.Count ? Labels[i] : (i + 1).ToString(), FontSize = 11 };
+            var label = new TextBlock { Text = (i < Labels.Count ? Labels[i] : (i + 1).ToString()).ToUpperInvariant(), FontSize = 10, FontFamily = FutureRetro.Mono, Foreground = FutureRetro.Pewter };
             label.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
             Canvas.SetLeft(label, model.ColumnX(i, gridWidth) * Cell - label.DesiredSize.Width / 2);
             Canvas.SetTop(label, 4); xAxis.Children.Add(label);
@@ -110,7 +112,8 @@ public sealed class DitherChart : DitherView
 
 public sealed class DitherPie : DitherView
 {
-    private readonly TextBlock total = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+    private readonly TextBlock total = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false,
+        FontFamily = FutureRetro.Mono, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = FutureRetro.Marble };
     public DitherLegend Legend { get; } = new();
     private int hover = -1;
     public IReadOnlyList<DitherSlice> Slices { set => SetOption("slices", value.Select(s => new { label = s.Label, value = s.Value, tone = s.Tone, fill = s.Fill }).ToArray()); }
@@ -139,7 +142,7 @@ public sealed class DitherPie : DitherView
         // Center chrome is shown only in a donut's empty center.
         double inner = Properties.GetValueOrDefault("inner") is System.Text.Json.JsonElement el ? el.GetDouble() : Convert.ToDouble(Properties.GetValueOrDefault("inner") ?? 0);
         total.Visibility = inner > 0 ? Visibility.Visible : Visibility.Collapsed;
-        Legend.SetItems(rows.Select((r, i) => (ChromeData.Text(r, "label"), ChromeData.Text(r, "tone", "blue"), hover < 0 || hover == i)));
+        Legend.SetItems(rows.Select((r, i) => (ChromeData.Text(r, "label"), ChromeData.Text(r, "tone", "near"), hover < 0 || hover == i)));
         AccessibleLabel = $"Pie chart, total {sum:G4}. " + string.Join(". ", rows.Select(r => $"{ChromeData.Text(r, "label")}: {r.GetProperty("value").GetDouble():G4}"));
         AutomationProperties.SetHelpText(this, total.Text);
     }
@@ -170,12 +173,12 @@ public sealed class DitherRadar : DitherView
             var tip = geometry.AxisTips[i];
             double dx = tip.X - geometry.Center.X, dy = tip.Y - geometry.Center.Y;
             double length = Math.Max(1, Math.Sqrt(dx * dx + dy * dy));
-            var label = new TextBlock { Text = i < Labels.Count ? Labels[i] : $"Axis {i + 1}", FontSize = 11 };
+            var label = new TextBlock { Text = (i < Labels.Count ? Labels[i] : $"Axis {i + 1}").ToUpperInvariant(), FontSize = 10, FontFamily = FutureRetro.Mono, Foreground = FutureRetro.Pewter };
             label.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
             Canvas.SetLeft(label, Surface.Margin.Left + tip.X * Cell + dx / length * 14 - label.DesiredSize.Width / 2);
             Canvas.SetTop(label, Surface.Margin.Top + tip.Y * Cell + dy / length * 14 - label.DesiredSize.Height / 2); axes.Children.Add(label);
         }
-        Legend.SetItems(rows.Select(r => (ChromeData.Text(r, "label"), ChromeData.Text(r, "tone", "blue"), !ChromeData.IsHidden(r))));
+        Legend.SetItems(rows.Select(r => (ChromeData.Text(r, "label"), ChromeData.Text(r, "tone", "near"), !ChromeData.IsHidden(r))));
         AccessibleLabel = "Radar chart. " + string.Join(". ", rows.Select(r => ChromeData.Text(r, "label"))) + ". Axes: " + string.Join(", ", Labels);
     }
 }

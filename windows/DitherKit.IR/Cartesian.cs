@@ -37,26 +37,29 @@ public sealed class Cartesian(CartesianKind kind, IReadOnlyList<Series> series)
         var i = Kind == CartesianKind.Bar ? (int)MathF.Floor(x / w * n) : Numeric.Round(x / (Math.Max(w, 2) - 1) * (n - 1));
         return Math.Clamp(i, 0, n - 1);
     }
+    /// <summary>Future-Retro chrome when any series uses a ramp tone.</summary>
+    public bool IsRamp => Series.Any(s => s.Tone.IsRamp);
     private float AlphaFor(int si) => Selected is { } selected && selected != si ? .3f : 1f;
     private double StackBelow(int si, int i) => Series.Take(si).Where(s => !s.Hidden).Sum(s => ValueAt(s, i));
     public DitherProgram Encode(int w, int h)
     {
         var p = new DitherProgram();
         if (w < 2 || h < 2) return p;
-        var scale = Scale();
+        var scale = Scale(); var ramp = IsRamp;
+        var (grid, gridDash, baseDash) = ramp ? (Encoder.Rule(), 2u, 1u) : (Encoder.Guide(), 3u, 2u);
         if (GridLines)
             foreach (var tick in scale.Ticks.Skip(1))
             {
-                var y = Numeric.Round(scale.Y(tick, h)); p.Line((0, y), (w - 1, y), Encoder.Guide(), 3);
+                var y = Numeric.Round(scale.Y(tick, h)); p.Line((0, y), (w - 1, y), grid, gridDash);
             }
-        if (Baseline) p.Line((0, h - 1), (w - 1, h - 1), Encoder.Guide(), 2);
+        if (Baseline) p.Line((0, h - 1), (w - 1, h - 1), grid, baseDash);
         if (Kind == CartesianKind.Bar) EncodeBars(p, scale, w, h); else EncodeCurves(p, scale, w, h);
         if (Kind != CartesianKind.Bar && Hover is { } hover && hover >= 0 && hover < Length)
         {
-            if (Bloom == Bloom.Off) p.Bloom(0, 0); else Bloom.Emit(p);
+            if (Bloom == Bloom.Off) p.Bloom(0, 0); else Bloom.Emit(p, ramp);
             EncodeHover(p, scale, w, h);
         }
-        else Bloom.Emit(p);
+        else Bloom.Emit(p, ramp);
         return p;
     }
     private void EncodeCurves(DitherProgram p, Scale scale, int w, int h)
@@ -111,13 +114,15 @@ public sealed class Cartesian(CartesianKind kind, IReadOnlyList<Series> series)
     private void EncodeHover(DitherProgram p, Scale scale, int w, int h)
     {
         if (Hover is not { } i || i < 0 || i >= Length) return;
-        var x = Numeric.Round(ColumnX(i, w));
-        p.Line((x, 0), (x, h - 1), Tone.Grey.Shade(.75f).Fade(.7f), 2);
+        var x = Numeric.Round(ColumnX(i, w)); var ramp = IsRamp;
+        p.Line((x, 0), (x, h - 1), ramp ? Palette.NearBlue : Tone.Grey.Shade(.75f).Fade(.7f), 2);
         for (var si = 0; si < Series.Count; si++)
         {
             var s = Series[si]; if (s.Hidden || i >= s.Values.Count) continue;
             var b = Stacked ? StackBelow(si, i) : 0;
-            p.Dot(x, Numeric.Round(scale.Y(b + s.Values[i], h)), s.Tone.Shade(.7f), s.Tone.Shade(.98f));
+            var y = Numeric.Round(scale.Y(b + s.Values[i], h));
+            if (ramp) p.Dot(x, y, s.Tone.Base, Palette.Marble);
+            else p.Dot(x, y, s.Tone.Shade(.7f), s.Tone.Shade(.98f));
         }
     }
     private void EncodeBars(DitherProgram p, Scale scale, int w, int h)

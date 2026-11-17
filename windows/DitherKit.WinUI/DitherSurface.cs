@@ -16,7 +16,11 @@ public class DitherSurface : UserControl
     private readonly CanvasControl canvas = new();
     private readonly UISettings settings = new();
     private readonly Stopwatch clock = new();
-    private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(16) };
+    // Future-Retro canvases run at film rate.
+    private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(1 / Motion.FilmFps) };
+    private TimeSpan lastTick;
+    private float phase = Motion.StillPhase;
+    private float? fieldEnergy;
     private CanvasRenderTarget? target;
     private double cell = 3;
     private string component = "gradient";
@@ -30,11 +34,16 @@ public class DitherSurface : UserControl
         {
             animate = value;
             if (IsLoaded && value && settings.AnimationsEnabled) timer.Start();
-            else if (!value && (!AnimateEntrance || clock.Elapsed.TotalMilliseconds >= 900)) timer.Stop();
+            else if (!value && (!AnimateEntrance || clock.Elapsed >= Motion.Reveal)) timer.Stop();
         }
     }
     public bool AnimateEntrance { get; set; }
+    /// <summary>Multiplies the field's phase rate (0 holds the still frame).</summary>
     public double Speed { get; set; } = 1;
+    /// <summary>Idle and hover energy for animated fields.</summary>
+    public Energy Energy { get; set; } = Energy.Field;
+    /// <summary>Set by the owning control: hover adds energy, not movement.</summary>
+    public bool Hovered { get; set; }
     public string Component { get => component; set { component = value; Invalidate(); } }
     public double Cell { get => cell; set { cell = double.IsFinite(value) ? Math.Max(1, value) : 3; Invalidate(); } }
     public Dictionary<string, object?> Properties { get => properties; set { properties = value ?? new(); Invalidate(); } }
@@ -54,10 +63,15 @@ public class DitherSurface : UserControl
         timer.Tick += (_, _) =>
         {
             if (!settings.AnimationsEnabled) { timer.Stop(); Invalidate(); return; }
-            if (!Animate && clock.Elapsed.TotalMilliseconds >= 900) { timer.Stop(); Invalidate(); return; }
+            if (!Animate && clock.Elapsed >= Motion.Reveal) { timer.Stop(); Invalidate(); return; }
+            var now = clock.Elapsed;
+            var dt = (float)Math.Clamp((now - lastTick).TotalSeconds, 0, .12) * (float)Speed;
+            lastTick = now;
+            (phase, var level) = Energy.Step(phase, fieldEnergy ?? Energy.Idle, Hovered, dt);
+            fieldEnergy = level;
             Invalidate();
         };
-        Loaded += (_, _) => { clock.Restart(); if (settings.AnimationsEnabled && (Animate || AnimateEntrance)) timer.Start(); Invalidate(); };
+        Loaded += (_, _) => { clock.Restart(); lastTick = TimeSpan.Zero; if (settings.AnimationsEnabled && (Animate || AnimateEntrance)) timer.Start(); Invalidate(); };
         Unloaded += (_, _) => { timer.Stop(); clock.Stop(); target?.Dispose(); target = null; dirty = true; };
     }
 
@@ -72,11 +86,12 @@ public class DitherSurface : UserControl
         if (dirty || target is null || w != GridWidth || h != GridHeight)
         {
             var options = new Dictionary<string, object?>(Properties) { ["w"] = w, ["h"] = h };
-            if (Animate) options["time"] = settings.AnimationsEnabled ? clock.Elapsed.TotalSeconds * Speed : 0;
+            // Fields advance by energy; with animations off they hold the still frame.
+            if (Animate) options["time"] = settings.AnimationsEnabled && Speed != 0 ? phase : Motion.StillPhase;
             if (AnimateEntrance)
             {
-                double t = settings.AnimationsEnabled ? Math.Clamp(clock.Elapsed.TotalMilliseconds / 900, 0, 1) : 1;
-                options["progress"] = 1 - Math.Pow(1 - t, 3);
+                double t = settings.AnimationsEnabled ? Math.Clamp(clock.Elapsed / Motion.Reveal, 0, 1) : 1;
+                options["progress"] = Motion.EaseOutCubic((float)t);
             }
             float[] data = Program ?? Encoder.Encode(Component, options).ToArray();
             target?.Dispose();

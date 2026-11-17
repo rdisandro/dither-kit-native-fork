@@ -128,7 +128,7 @@ fn compare_all(gles: bool) {
     let document: serde_json::Value =
         serde_json::from_slice(&std::fs::read(fixtures.join("scenes.json")).unwrap()).unwrap();
     let scenes = document["scenes"].as_array().unwrap();
-    assert_eq!(scenes.len(), 39, "all shared scenes must be checked");
+    assert_eq!(scenes.len(), 74, "all shared scenes must be checked");
     for scene in scenes {
         let name = scene["name"].as_str().unwrap();
         let w = scene["w"].as_i64().unwrap() as i32;
@@ -181,12 +181,12 @@ fn compare_all(gles: bool) {
 }
 #[test]
 #[cfg(target_os = "linux")]
-fn desktop_gl_matches_all_39_goldens() {
+fn desktop_gl_matches_all_goldens() {
     compare_all(false);
 }
 #[test]
 #[cfg(target_os = "linux")]
-fn gles_matches_all_39_goldens() {
+fn gles_matches_all_goldens() {
     compare_all(true);
 }
 
@@ -223,7 +223,7 @@ fn shader_profile() {
     let fixture_bytes = std::fs::read(fixtures).unwrap();
     let document: serde_json::Value = serde_json::from_slice(&fixture_bytes).unwrap();
     let scenes = document["scenes"].as_array().unwrap();
-    assert_eq!(scenes.len(), 39);
+    assert_eq!(scenes.len(), 74);
     let all = std::env::var("DITHER_PROFILE_ALL").as_deref() == Ok("1");
     let device = unsafe {
         serde_json::json!({
@@ -295,7 +295,7 @@ fn shader_profile() {
             "median_cpu_wall_us_per_render": cpu_median,
         }));
     }
-    assert_eq!(results.len(), if all { 39 } else { SELECTED.len() });
+    assert_eq!(results.len(), if all { 74 } else { SELECTED.len() });
     if let Some(path) = std::env::var_os("DITHER_PROFILE_JSON") {
         let report = serde_json::json!({
             "device": device, "samples": SAMPLES, "renders_per_sample": FRAMES,
@@ -386,7 +386,7 @@ mod macos {
 }
 #[test]
 #[cfg(target_os = "macos")]
-fn macos_gl_matches_all_39_goldens() {
+fn macos_gl_matches_all_goldens() {
     compare_all(false);
 }
 

@@ -5,7 +5,7 @@
 //! computed here on the CPU; everything per-pixel happens in the shaders.
 //! The Swift and C# ports mirror this file function for function.
 
-use crate::color::{Rgba, Tone};
+use crate::color::{Rgba, Tone, palette};
 use crate::program::{NONE, Program, op, rgba, tone};
 
 /// A threshold matrix.
@@ -41,10 +41,14 @@ pub enum Fill {
     Dotted,
     Hatched,
     Solid,
+    /// Future-Retro dot matrix (the app's GlassBarGraph): one dot per
+    /// two cells, lit from the axis up and brightening toward the tip.
+    /// Bars and meters keep their unlit dots as a faint grid.
+    Matrix,
 }
 
 impl Fill {
-    pub const ALL: [Fill; 4] = [Fill::Gradient, Fill::Dotted, Fill::Hatched, Fill::Solid];
+    pub const ALL: [Fill; 5] = [Fill::Gradient, Fill::Dotted, Fill::Hatched, Fill::Solid, Fill::Matrix];
 
     pub fn id(self) -> f32 {
         match self {
@@ -52,6 +56,7 @@ impl Fill {
             Fill::Dotted => 1.0,
             Fill::Hatched => 2.0,
             Fill::Solid => 3.0,
+            Fill::Matrix => 4.0,
         }
     }
 }
@@ -79,10 +84,15 @@ impl Bloom {
         }
     }
 
-    fn emit(self, p: &mut Program) {
+    /// Emits the bloom op; Future-Retro (`ramp`) glow is dithered blue-ink.
+    fn emit(self, p: &mut Program, ramp: bool) {
         if self != Bloom::Off {
             let (r, s) = self.params();
-            p.bloom(r, s);
+            if ramp {
+                p.bloom_ramp(r, s);
+            } else {
+                p.bloom(r, s);
+            }
         }
     }
 }
@@ -109,18 +119,43 @@ impl Direction {
     }
 }
 
+/// A background field. The first five come from dither-core; the rest are
+/// Future-Retro's dither fields, evolved in absolute grid units (160 points
+/// per noise unit at a 3-point cell) so their grain does not stretch with
+/// the surface.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Field {
-    #[default]
     Plasma,
     Waves,
     Ripple,
     Noise,
     Aurora,
+    /// The house field: drifting fbm clouds.
+    #[default]
+    Clouds,
+    /// Veined marble.
+    Marble,
+    /// Rings rippling out from the center.
+    Rings,
+    /// A warped web of light, like the floor of a pool.
+    Caustics,
 }
 
 impl Field {
-    pub const ALL: [Field; 5] = [Field::Plasma, Field::Waves, Field::Ripple, Field::Noise, Field::Aurora];
+    pub const ALL: [Field; 9] = [
+        Field::Plasma,
+        Field::Waves,
+        Field::Ripple,
+        Field::Noise,
+        Field::Aurora,
+        Field::Clouds,
+        Field::Marble,
+        Field::Rings,
+        Field::Caustics,
+    ];
+
+    /// Future-Retro's fields, house field first.
+    pub const LIGHT: [Field; 4] = [Field::Clouds, Field::Marble, Field::Rings, Field::Caustics];
 
     pub fn id(self) -> f32 {
         match self {
@@ -129,8 +164,68 @@ impl Field {
             Field::Ripple => 2.0,
             Field::Noise => 3.0,
             Field::Aurora => 4.0,
+            Field::Clouds => 5.0,
+            Field::Marble => 6.0,
+            Field::Rings => 7.0,
+            Field::Caustics => 8.0,
         }
     }
+
+    /// Future-Retro fields carry their own contrast and gain.
+    pub fn is_light(self) -> bool {
+        self.id() >= 5.0
+    }
+
+    /// Density the field is tuned for: Future-Retro fields at full, the
+    /// upstream fields at dither-core's 0.6.
+    pub fn default_density(self) -> f32 {
+        if self.is_light() { 1.0 } else { 0.6 }
+    }
+}
+
+/// Future-Retro field energy (`--cc-energy-*`): how fast a field's phase
+/// advances, at rest and under the pointer. Phase advances `energy * 4`
+/// per second and eases between the two over about 200 ms.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Energy {
+    pub idle: f32,
+    pub hover: f32,
+}
+
+impl Energy {
+    /// The closing CTA's clouds.
+    pub const FIELD: Energy = Energy { idle: 0.18, hover: 0.32 };
+    /// The card clouds: calmer, behind text.
+    pub const CARD: Energy = Energy { idle: 0.12, hover: 0.28 };
+
+    /// Advances `phase` by `dt` seconds, easing `energy` toward its target.
+    /// Returns the new `(phase, energy)`.
+    pub fn step(self, phase: f32, energy: f32, hovered: bool, dt: f32) -> (f32, f32) {
+        let target = if hovered { self.hover } else { self.idle };
+        let energy = energy + (target - energy) * (dt / 0.2).min(1.0);
+        (phase + dt * energy * 4.0, energy)
+    }
+}
+
+impl Default for Energy {
+    fn default() -> Self {
+        Energy::FIELD
+    }
+}
+
+/// Future-Retro canvases run at film rate.
+pub const FILM_FPS: f32 = 24.0;
+/// Future-Retro's still frame: the phase shown under reduced motion.
+pub const STILL_PHASE: f32 = 3.0;
+/// Reveal duration (`--cc-dur-reveal`), seconds.
+pub const REVEAL_SECONDS: f32 = 0.6;
+/// Hover/press response (`--cc-dur-quick`), seconds.
+pub const QUICK_SECONDS: f32 = 0.16;
+
+/// Cubic ease-out, the dot chart's column rise.
+pub fn ease_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +243,7 @@ pub struct Gradient {
 
 impl Gradient {
     pub fn new(from: Tone) -> Self {
-        Self { from, to: None, direction: Direction::Up, matrix: Matrix::Bayer8, density: 1.0 }
+        Self { from, to: None, direction: Direction::Up, matrix: Matrix::Bayer4, density: 1.0 }
     }
 
     pub fn encode(&self, w: usize, h: usize) -> Program {
@@ -186,7 +281,7 @@ pub struct Background {
 
 impl Background {
     pub fn new(field: Field, tone: Tone) -> Self {
-        Self { field, tone, accent: None, matrix: Matrix::Bayer8, density: 0.6 }
+        Self { field, tone, accent: None, matrix: Matrix::Bayer4, density: field.default_density() }
     }
 
     pub fn encode(&self, w: usize, h: usize, time: f32) -> Program {
@@ -249,9 +344,62 @@ impl ButtonStyle {
     /// Background tint behind the label, if any.
     pub fn surface(self, tone: Tone) -> Option<Rgba> {
         match self {
+            ButtonStyle::Solid if tone.is_ramp() => Some(tone.base()),
             ButtonStyle::Solid => Some(tone.shade(0.22)),
             _ => None,
         }
+    }
+
+    /// Native chrome for a Future-Retro button (Near AI OS Design System,
+    /// marketing buttons): flat fills, no texture, no sparkles.
+    pub fn chrome(self, tone: Tone, hovered: bool, pressed: bool) -> ButtonChrome {
+        let hot = hovered || pressed;
+        let base = if tone.is_ramp() { tone.base() } else { tone.shade(0.55) };
+        match self {
+            // Flat pigment with void ink and the tab-bar glow below; hover
+            // mixes 12% white into the fill and lifts the glow.
+            ButtonStyle::Solid => ButtonChrome {
+                fill: Some(if hot { base.mix(Rgba::WHITE, 0.12) } else { base }),
+                border: None,
+                label: palette::VOID,
+                glow: Some(base.fade(if hot { 0.8 } else { 0.65 })),
+                underline: None,
+            },
+            // A 1px marble outline; hover fills it marble with void ink.
+            ButtonStyle::Outline => ButtonChrome {
+                fill: hot.then_some(palette::MARBLE),
+                border: Some(palette::MARBLE),
+                label: if hot { palette::VOID } else { palette::MARBLE },
+                glow: None,
+                underline: None,
+            },
+            // Text only, with a 1px pigment underline; hover turns it blue.
+            ButtonStyle::Ghost => ButtonChrome {
+                fill: None,
+                border: None,
+                label: if hot { base } else { palette::MARBLE },
+                glow: None,
+                underline: Some(base),
+            },
+        }
+    }
+}
+
+/// Colors for a Future-Retro button drawn with native controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ButtonChrome {
+    pub fill: Option<Rgba>,
+    pub border: Option<Rgba>,
+    pub label: Rgba,
+    /// Glow below the button: `0 14 30 -12` (hover `0 18 36 -12`) at this color.
+    pub glow: Option<Rgba>,
+    pub underline: Option<Rgba>,
+}
+
+impl ButtonChrome {
+    /// Glow `(y offset, blur radius)` in points, after the app's tab bar.
+    pub fn glow_geometry(hovered: bool) -> (f32, f32) {
+        if hovered { (18.0, 36.0) } else { (14.0, 30.0) }
     }
 }
 
@@ -283,6 +431,36 @@ pub fn fnv1a(bytes: &[u8]) -> u64 {
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
     h
+}
+
+/// A deterministic 8x8 identicon in one tone. A Future-Retro ramp lights
+/// its pattern in the ramp's pigment, accents in its bright tint, and
+/// leaves the rest slate; any other tone uses that tone's hue.
+pub fn avatar_tone(name: &str, tone_: Tone) -> Program {
+    match tone_.ramp() {
+        Some(id) => avatar_hue(name, -(id as f32)),
+        None => avatar(name, Some(tone_.hue())),
+    }
+}
+
+fn avatar_hue(name: &str, hue: f32) -> Program {
+    let h = fnv1a(name.as_bytes());
+    let bits = h as u32;
+    let mirror_x = (h >> 32) & 1 == 0;
+    let acc = ((h >> 41) as u32) & 0x7F_FFFF;
+    let mut p = Program::new();
+    p.push(
+        op::AVATAR,
+        &[
+            (bits & 0xFFFF) as f32,
+            (bits >> 16) as f32,
+            mirror_x as u8 as f32,
+            hue,
+            (acc & 0xFFFF) as f32,
+            (acc >> 16) as f32,
+        ],
+    );
+    p
 }
 
 /// A deterministic 8x8 identicon. Always render it into an 8x8 grid.
@@ -401,6 +579,12 @@ pub fn guide() -> Rgba {
     Tone::Grey.shade(0.55).fade(0.45)
 }
 
+/// Future-Retro rules: faint ink hairlines (dotted on a two-cell pitch for
+/// grid lines, solid for the axis).
+pub fn rule() -> Rgba {
+    palette::RULE
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CartesianKind {
     #[default]
@@ -486,6 +670,12 @@ impl<'a> Cartesian<'a> {
         Some((i.max(0.0) as usize).min(n - 1))
     }
 
+    /// Future-Retro chrome (slate rules, a blue crosshair, blue-ink glow)
+    /// when any series uses a ramp tone.
+    pub fn is_ramp(&self) -> bool {
+        self.series.iter().any(|s| s.tone.is_ramp())
+    }
+
     fn alpha_for(&self, series: usize) -> f32 {
         match self.selected {
             Some(s) if s != series => 0.3,
@@ -503,14 +693,16 @@ impl<'a> Cartesian<'a> {
             return p;
         }
         let scale = self.scale();
+        let ramp = self.is_ramp();
+        let (grid, grid_dash, base_dash) = if ramp { (rule(), 2, 1) } else { (guide(), 3, 2) };
         if self.grid_lines {
             for &t in scale.ticks.iter().skip(1) {
                 let y = scale.y(t, h).round() as i32;
-                p.line((0, y), (w as i32 - 1, y), guide(), 3);
+                p.line((0, y), (w as i32 - 1, y), grid, grid_dash);
             }
         }
         if self.baseline {
-            p.line((0, h as i32 - 1), (w as i32 - 1, h as i32 - 1), guide(), 2);
+            p.line((0, h as i32 - 1), (w as i32 - 1, h as i32 - 1), grid, base_dash);
         }
         match self.kind {
             CartesianKind::Area | CartesianKind::Line => self.encode_curves(&mut p, &scale, w, h),
@@ -521,11 +713,11 @@ impl<'a> Cartesian<'a> {
             if self.bloom == Bloom::Off {
                 p.bloom(0, 0.0);
             } else {
-                self.bloom.emit(&mut p);
+                self.bloom.emit(&mut p, ramp);
             }
             self.encode_hover(&mut p, &scale, w, h);
         } else {
-            self.bloom.emit(&mut p);
+            self.bloom.emit(&mut p, ramp);
         }
         p
     }
@@ -591,12 +783,19 @@ impl<'a> Cartesian<'a> {
     fn encode_hover(&self, p: &mut Program, scale: &Scale, w: usize, h: usize) {
         let Some(i) = self.hover.filter(|i| *i < self.len()) else { return };
         let x = self.column_x(i, w).round() as i32;
-        p.line((x, 0), (x, h as i32 - 1), Tone::Grey.shade(0.75).fade(0.7), 2);
+        let ramp = self.is_ramp();
+        // Future-Retro: the current column is a dotted Near AI blue signal.
+        let cross = if ramp { palette::NEAR_BLUE } else { Tone::Grey.shade(0.75).fade(0.7) };
+        p.line((x, 0), (x, h as i32 - 1), cross, 2);
         for (si, s) in self.series.iter().enumerate().filter(|(_, s)| !s.hidden) {
             let Some(v) = s.values.get(i) else { continue };
             let b = if self.stacked { self.stack_below(si, i) } else { 0.0 };
             let y = scale.y(b + v, h).round() as i32;
-            p.dot(x, y, s.tone.shade(0.7), s.tone.shade(0.98));
+            if ramp {
+                p.dot(x, y, s.tone.base(), palette::MARBLE);
+            } else {
+                p.dot(x, y, s.tone.shade(0.7), s.tone.shade(0.98));
+            }
         }
     }
 
@@ -762,7 +961,7 @@ impl<'a> Pie<'a> {
                 off,
             ],
         );
-        self.bloom.emit(&mut p);
+        self.bloom.emit(&mut p, self.slices.iter().any(|s| s.tone.is_ramp()));
         p
     }
 }
@@ -814,6 +1013,8 @@ impl<'a> Radar<'a> {
             return p;
         }
         let c = (geo.center.0.round() as i32, geo.center.1.round() as i32);
+        let ramp = self.series.iter().any(|s| s.tone.is_ramp());
+        let (ring_color, ring_dash, spoke_dash) = if ramp { (rule(), 2, 2) } else { (guide(), 2, 3) };
         let at = |i: usize, f: f32| {
             let (tx, ty) = geo.axis_tips[i % n];
             (
@@ -824,11 +1025,11 @@ impl<'a> Radar<'a> {
         for ring in 1..=self.rings.max(1) {
             let f = ring as f32 / self.rings.max(1) as f32;
             for i in 0..n {
-                p.line(at(i, f), at(i + 1, f), guide(), 2);
+                p.line(at(i, f), at(i + 1, f), ring_color, ring_dash);
             }
         }
         for i in 0..n {
-            p.line(c, at(i, 1.0), guide(), 3);
+            p.line(c, at(i, 1.0), ring_color, spoke_dash);
         }
         let max = self.max.unwrap_or_else(|| {
             Scale::nice(self.series.iter().flat_map(|s| s.values.iter().copied()).fold(0.0, f64::max), self.rings).max
@@ -863,7 +1064,7 @@ impl<'a> Radar<'a> {
                 p.dot(x.round() as i32, y.round() as i32, stroke, s.tone.shade(0.97).fade(alpha));
             }
         }
-        self.bloom.emit(&mut p);
+        self.bloom.emit(&mut p, ramp);
         p
     }
 }

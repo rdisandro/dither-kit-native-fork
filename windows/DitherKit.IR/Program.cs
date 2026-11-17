@@ -48,6 +48,10 @@ public sealed class DitherProgram
     public void Dot(int x, int y, Rgba ring, Rgba center) =>
         Push(Op.Dot, x, y, ring.R, ring.G, ring.B, ring.A, center.R, center.G, center.B, center.A);
     public void Bloom(int radius, float strength) => Push(Op.Bloom, radius, strength);
+    /// <summary>Optional third BLOOM argument selecting the Future-Retro blue-ink glow.</summary>
+    public const float GlowRamp = 1;
+    /// <summary>A Future-Retro bloom: opaque blue-ink glow, thinned by ordered dither.</summary>
+    public void BloomRamp(int radius, float strength) => Push(Op.Bloom, radius, strength, GlowRamp);
 }
 
 internal static class Numeric

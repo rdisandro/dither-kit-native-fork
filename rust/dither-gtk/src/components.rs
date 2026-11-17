@@ -10,6 +10,87 @@ use std::{
 fn animations(widget: &impl IsA<gtk::Widget>) -> bool {
     widget.settings().is_gtk_enable_animations()
 }
+
+fn css_rgba(c: Rgba) -> String {
+    format!("rgba({},{},{},{:.3})", c.r, c.g, c.b, c.a as f32 / 255.0)
+}
+
+/// The Future-Retro stylesheet for native chrome around dither surfaces:
+/// void ground, obsidian cards with a slate hairline, mono labels, Terminal
+/// tooltips and flat Near AI buttons. Apps keep the system font (Near AI OS
+/// Design System NDS-4); labels use its monospace.
+pub fn future_retro_css() -> String {
+    use dither_ir::palette::*;
+    let mut css = format!(
+        ".dither-void {{ background: {void}; color: {silver}; }}
+.dither-card {{ background: {obsidian}; border: 1px solid {slate}; border-radius: 14px; padding: 16px; }}
+.dither-label {{ font-family: monospace; font-size: 11px; letter-spacing: 1px; color: {pewter}; }}
+.dither-axis {{ font-family: monospace; font-size: 10px; color: {pewter}; }}
+.dither-value {{ font-family: monospace; font-weight: 600; color: {marble}; }}
+.dither-title {{ font-size: 34px; font-weight: 600; letter-spacing: -1px; color: {marble}; }}
+.dither-void .tooltip {{ background: #1E1E1F; color: #E4E4E6; font-family: monospace; font-size: 11px; padding: 6px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.11); }}
+.dither-legend button {{ background: none; border: none; box-shadow: none; color: {silver}; padding: 2px 4px; }}
+.dither-legend button:not(:checked) {{ opacity: 0.4; }}
+",
+        void = css_rgba(VOID),
+        silver = css_rgba(SILVER),
+        obsidian = css_rgba(OBSIDIAN),
+        slate = css_rgba(SLATE),
+        pewter = css_rgba(PEWTER),
+        marble = css_rgba(MARBLE),
+    );
+    for tone in Tone::RAMPS {
+        css.push_str(&flat_button_css(tone));
+    }
+    css
+}
+
+/// Installs [`future_retro_css`] for a display.
+pub fn install_future_retro_css(display: &gtk::gdk::Display) {
+    let provider = gtk::CssProvider::new();
+    provider.load_from_data(&future_retro_css());
+    gtk::style_context_add_provider_for_display(
+        display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
+/// Flat button rules for a ramp tone, from [`ButtonStyle::chrome`].
+fn flat_button_css(tone: Tone) -> String {
+    let name = tone.name();
+    let mut css = format!(
+        "button.dither-flat-{name} {{ background-image: none; box-shadow: none; border: 1px solid transparent; border-radius: 8px; padding: 12px 20px 11px; font-weight: 600; font-size: 15px; transition: background-color 160ms cubic-bezier(0.16,1,0.3,1), color 160ms cubic-bezier(0.16,1,0.3,1), box-shadow 160ms cubic-bezier(0.16,1,0.3,1); }}
+button.dither-flat-{name}:active {{ transform: translateY(1px); }}
+"
+    );
+    for (style, class) in [
+        (ButtonStyle::Solid, "solid"),
+        (ButtonStyle::Outline, "outline"),
+        (ButtonStyle::Ghost, "ghost"),
+    ] {
+        for (state, hot) in [("", false), (":hover", true), (":active", true)] {
+            let c = style.chrome(tone, hot, false);
+            let (gy, gr) = ButtonChrome::glow_geometry(hot);
+            css.push_str(&format!(
+                "button.dither-flat-{name}.{class}{state} {{ background-color: {}; border-color: {}; color: {}; box-shadow: {}; }}
+",
+                c.fill.map(css_rgba).unwrap_or_else(|| "transparent".into()),
+                c.border.map(css_rgba).unwrap_or_else(|| "transparent".into()),
+                css_rgba(c.label),
+                c.glow.map(|g| format!("0 {gy}px {gr}px -12px {}", css_rgba(g))).unwrap_or_else(|| "none".into()),
+            ));
+            if let Some(u) = c.underline {
+                css.push_str(&format!(
+                    "button.dither-flat-{name}.{class}{state} label {{ text-decoration-line: underline; text-decoration-color: {}; }}
+",
+                    css_rgba(u)
+                ));
+            }
+        }
+    }
+    css
+}
 fn entrance(surface: &DitherSurface, progress: Rc<Cell<f32>>) {
     if !animations(surface.widget()) {
         progress.set(1.0);
@@ -22,11 +103,11 @@ fn entrance(surface: &DitherSurface, progress: Rc<Cell<f32>>) {
         let first = start.get().unwrap_or(now);
         start.set(Some(first));
         let t = if animations(area) {
-            ((now - first) as f32 / 900_000.0).clamp(0.0, 1.0)
+            ((now - first) as f32 / (REVEAL_SECONDS * 1_000_000.0)).clamp(0.0, 1.0)
         } else {
             1.0
         };
-        progress.set(1.0 - (1.0 - t).powi(3));
+        progress.set(ease_out_cubic(t));
         area.queue_render();
         if t >= 1.0 {
             glib::ControlFlow::Break
@@ -80,33 +161,74 @@ impl DitherGradient {
         self.surface.set_encoder(move |w, h| options.encode(w, h));
     }
 }
+/// A live field at film rate (24 fps). Its phase advances at the field's
+/// energy and quickens under the pointer; with animations off it holds the
+/// Future-Retro still frame. GTK only ticks mapped widgets, so it pauses
+/// offscreen.
 #[derive(Clone)]
 pub struct DitherBackground {
     surface: DitherSurface,
     speed: Rc<Cell<f32>>,
+    energy: Rc<Cell<Energy>>,
 }
 impl DitherBackground {
     pub fn new(options: Background) -> Self {
-        let time = Rc::new(Cell::new(0.0));
-        let t = time.clone();
-        let surface = DitherSurface::new(3, move |w, h| options.encode(w, h, t.get()));
+        Self::with_cell(options, 3)
+    }
+    /// Cell size in pixels: 3 for header art, 2 for card-sized fields.
+    pub fn with_cell(options: Background, cell: i32) -> Self {
+        let phase = Rc::new(Cell::new(STILL_PHASE));
+        let t = phase.clone();
+        let surface = DitherSurface::new(cell, move |w, h| options.encode(w, h, t.get()));
         surface.set_accessible_label("Animated dither background");
         let speed = Rc::new(Cell::new(1.0));
-        let s = speed.clone();
+        let energy = Rc::new(Cell::new(Energy::FIELD));
+        let hovered = Rc::new(Cell::new(false));
+        let hv = hovered.clone();
+        motion(&surface, move |inside, _, _| hv.set(inside));
+        let (s, e) = (speed.clone(), energy.clone());
+        let current = Cell::new(None::<f32>);
         let previous = Cell::new(None);
+        let last_frame = Cell::new(0i64);
         surface.widget().add_tick_callback(move |area, clock| {
             let now = clock.frame_time();
             let prev = previous.replace(Some(now)).unwrap_or(now);
-            if animations(area) && s.get() != 0.0 {
-                time.set(time.get() + (now - prev) as f32 / 1_000_000.0 * s.get());
+            if !animations(area) || s.get() == 0.0 {
+                if phase.replace(STILL_PHASE) != STILL_PHASE {
+                    area.queue_render();
+                }
+                return glib::ControlFlow::Continue;
+            }
+            let dt = ((now - prev) as f32 / 1_000_000.0).clamp(0.0, 0.12) * s.get();
+            let rates = e.get();
+            let (next, level) = rates.step(
+                phase.get(),
+                current.get().unwrap_or(rates.idle),
+                hovered.get(),
+                dt,
+            );
+            phase.set(next);
+            current.set(Some(level));
+            // Film rate: draw a new frame every 1/24 s.
+            if now - last_frame.get() >= (1_000_000.0 / FILM_FPS) as i64 - 2_000 {
+                last_frame.set(now);
                 area.queue_render();
             }
             glib::ControlFlow::Continue
         });
-        Self { surface, speed }
+        Self {
+            surface,
+            speed,
+            energy,
+        }
     }
+    /// Multiplies the field's phase rate (0 holds the still frame).
     pub fn set_speed(&self, speed: f32) {
         self.speed.set(if speed.is_finite() { speed } else { 0.0 });
+    }
+    /// Idle and hover energy; [`Energy::CARD`] for fields behind text.
+    pub fn set_energy(&self, energy: Energy) {
+        self.energy.set(energy);
     }
     pub fn widget(&self) -> &gtk::GLArea {
         self.surface.widget()
@@ -120,10 +242,19 @@ pub struct DitherAvatar {
     surface: DitherSurface,
 }
 impl DitherAvatar {
+    /// An upstream identicon: `hue`, or a hue from the name.
     pub fn new(name: &str, size: i32, hue: Option<f32>) -> Self {
-        let name = name.to_owned();
+        let owned = name.to_owned();
+        Self::build(name, size, move || avatar(&owned, hue))
+    }
+    /// A one-pigment identicon in a tone (Near AI blue by default elsewhere).
+    pub fn with_tone(name: &str, size: i32, tone: Tone) -> Self {
+        let owned = name.to_owned();
+        Self::build(name, size, move || avatar_tone(&owned, tone))
+    }
+    fn build(name: &str, size: i32, encode: impl Fn() -> Program + 'static) -> Self {
         let label = format!("Avatar for {name}");
-        let surface = DitherSurface::new((size / 8).max(1), move |_, _| avatar(&name, hue));
+        let surface = DitherSurface::new((size / 8).max(1), move |_, _| encode());
         surface.widget().set_size_request(size, size);
         surface.widget().set_hexpand(false);
         surface.widget().set_vexpand(false);
@@ -171,6 +302,7 @@ impl DitherLegend {
     ) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         widget.set_halign(gtk::Align::Center);
+        widget.add_css_class("dither-legend");
         let changed = Rc::new(changed);
         let selected = Rc::new(selected);
         for (index, series) in series.iter().enumerate() {
@@ -318,6 +450,7 @@ impl DitherChart {
                 let grid_h = (sf.widget().height() / cell).max(1) as usize;
                 for tick in &scale.ticks {
                     let label = gtk::Label::new(Some(&format_value(*tick)));
+                    label.add_css_class("dither-axis");
                     let width = label.measure(gtk::Orientation::Horizontal, -1).1;
                     let height = label.measure(gtk::Orientation::Vertical, width).1;
                     y.put(
@@ -327,7 +460,8 @@ impl DitherChart {
                     );
                 }
                 for (i, text) in o.x_labels.iter().enumerate() {
-                    let label = gtk::Label::new(Some(text));
+                    let label = gtk::Label::new(Some(&text.to_uppercase()));
+                    label.add_css_class("dither-axis");
                     let width = label.measure(gtk::Orientation::Horizontal, -1).1;
                     let index = if o.x_labels.len() > 1 {
                         i * (chart.len().saturating_sub(1)) / (o.x_labels.len() - 1)
@@ -468,6 +602,7 @@ impl DitherPie {
         widget.set_child(Some(surface.widget()));
         let total: f64 = slices.iter().map(|s| s.value.max(0.0)).sum();
         let center = gtk::Label::new(Some(&format_value(total)));
+        center.add_css_class("dither-value");
         center.set_halign(gtk::Align::Center);
         center.set_valign(gtk::Align::Center);
         center.set_can_target(false);
@@ -545,7 +680,8 @@ impl DitherRadar {
         let labels_vec: Vec<_> = axes
             .iter()
             .map(|text| {
-                let l = gtk::Label::new(Some(text));
+                let l = gtk::Label::new(Some(&text.to_uppercase()));
+                l.add_css_class("dither-axis");
                 labels.put(&l, 0.0, 0.0);
                 l
             })
@@ -662,18 +798,24 @@ impl DitherMeter {
             self.value.clone(),
             self.running.clone(),
         );
-        let velocity = Cell::new(0.0f32);
-        let previous = Cell::new(None);
+        // Nothing bounces: ease out (cubic) over the reveal duration, and
+        // restart from wherever the meter is if the target moves mid-way.
+        let from = Cell::new(value.get());
+        let aim = Cell::new(target.get());
+        let start = Cell::new(None::<i64>);
         self.surface.widget().add_tick_callback(move |area, clock| {
             let now = clock.frame_time();
-            let prev = previous.replace(Some(now)).unwrap_or(now - 16_667);
-            let dt = ((now - prev) as f32 / 1_000_000.0).clamp(0.0, 0.033);
-            let delta = target.get() - value.get();
-            let speed = (velocity.get() + delta * 180.0 * dt) * (-20.0 * dt).exp();
-            velocity.set(speed);
-            value.set((value.get() + speed * dt).clamp(0.0, 1.0));
+            if aim.get() != target.get() {
+                aim.set(target.get());
+                from.set(value.get());
+                start.set(Some(now));
+            }
+            let first = *start.get().get_or_insert(now);
+            start.set(Some(first));
+            let t = ((now - first) as f32 / (REVEAL_SECONDS * 1_000_000.0)).clamp(0.0, 1.0);
+            value.set(from.get() + (aim.get() - from.get()) * ease_out_cubic(t));
             area.queue_render();
-            if !animations(area) || (delta.abs() < 0.001 && speed.abs() < 0.005) {
+            if !animations(area) || t >= 1.0 {
                 value.set(target.get());
                 running.set(false);
                 glib::ControlFlow::Break
@@ -696,7 +838,24 @@ pub struct DitherButton {
     surface: DitherSurface,
 }
 impl DitherButton {
+    /// A Future-Retro tone draws the flat Near AI button with native CSS
+    /// (install [`future_retro_css`]); its surface stays unparented. Upstream
+    /// tones keep dither-core's textured, sparkling surface.
     pub fn new(label: &str, tone: Tone, style: ButtonStyle) -> Self {
+        if tone.is_ramp() {
+            let surface = DitherSurface::new(3, move |w, h| button(w, h, tone, style, 0.0, 0.0));
+            let widget = gtk::Button::with_label(label);
+            widget.add_css_class(&format!("dither-flat-{}", tone.name()));
+            widget.add_css_class(match style {
+                ButtonStyle::Solid => "solid",
+                ButtonStyle::Outline => "outline",
+                ButtonStyle::Ghost => "ghost",
+            });
+            return Self { widget, surface };
+        }
+        Self::textured(label, tone, style)
+    }
+    fn textured(label: &str, tone: Tone, style: ButtonStyle) -> Self {
         let hovered = Rc::new(Cell::new(false));
         let pressed = Rc::new(Cell::new(false));
         let time = Rc::new(Cell::new(0.0));
