@@ -19,9 +19,24 @@ The logical shader gate permits a maximum channel difference of 2 and at most 1%
 
 Additional local validation passed: native Apple OpenGL goldens, strict GTK Clippy, sandboxed SwiftPM builds, and an iOS 17 simulator-destination cross-build with correctly targeted Metal. The local Apple GL and Metal comparisons observed maximum channel drift 1.
 
+## Future-Retro update (local, macOS 27 / Apple M5 Pro)
+
+The [Future-Retro styles](FUTURE-RETRO.md) were validated locally before CI:
+
+| Check | Result |
+| --- | --- |
+| `cargo test -p dither-ir -p dither-golden`; `dither-golden -- ../fixtures --check` | 8 VM tests pass. All 39 upstream scenes still match dither-core 0.1.0 with 0 mismatched pixels; the 35 Future-Retro scenes match their committed PNGs. `scenes.json` keeps the upstream scenes byte-identical |
+| `swift test --package-path swift` | 12 IR tests (all 74 scenes independently encoded) and 3 DitherKit tests, including Metal/ImageRenderer and premultiplied comparisons of all 74 scenes. Every Future-Retro scene is pixel-exact |
+| `cargo test -p dither-gtk` (CGL headless, Apple OpenGL 4.1) | All 74 GLSL goldens pass; every Future-Retro scene is pixel-exact. `glslangValidator` also accepts the shader as `#version 330 core` and `#version 300 es` |
+| `dotnet test windows/DitherKit.IR.Tests` (.NET 8.0.428) | 113 tests pass, including all 74 encoder fixtures |
+| `DitherKit.WinUI` compile on macOS (`-t:Compile`, runtime-shader mode) | No errors or warnings; ComputeSharp's D2D generator emits HLSL for the new helpers |
+| Galleries | SwiftUI `--snapshot` export inspected (`artifacts/swift-gallery.png`); GTK `--smoke` capture on macOS passes its readiness checks; GTK flat-button CSS inspected at rest and hover. `cargo clippy -p dither-gtk -p dither-ir -p dither-golden --all-targets` is clean |
+
+Still for CI: GLSL goldens under Linux Mesa (desktop GL and GLES), FXC compilation and the Win2D/WARP goldens on Windows, the WinUI gallery build (its PRI/XAML tasks are Windows-only), and Windows button chrome on a running app. WinUI ramp buttons have no glow; WinUI has no colored drop shadow without composition code.
+
 ## Gallery evidence
 
-`docs/gallery-gtk.png` is the verified Linux llvmpipe gallery capture. `artifacts/swift-gallery.png` is the inspected native SwiftUI gallery export. The GTK smoke check disables animations before constructing components, waits for completed frames and stable allocation, checks seven separated axis-label groups, and verifies populated GPU chart geometry before saving the image.
+`docs/gallery-gtk.png` is the verified Linux llvmpipe gallery capture from before the Future-Retro update; CI uploads a fresh capture as the `gtk-gallery` artifact. `artifacts/swift-gallery.png` is the inspected native SwiftUI gallery export. The GTK smoke check disables animations before constructing components, waits for completed frames and stable allocation, checks seven separated axis-label groups, and verifies populated GPU chart geometry before saving the image.
 
 Native component review fixed visibility overrides, axes positioned against actual scale geometry, GTK callback ownership cycles, WinUI hover handling for unequal-length series, and button density/ticking behavior. Encoder regressions cover formatting/saturating casts and NaN reductions.
 

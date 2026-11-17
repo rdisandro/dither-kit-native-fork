@@ -2,7 +2,9 @@
 
 Native shader-driven ports of [dither-kit-rs](https://github.com/DeepanshuMishraa/dither-kit-rs) for GTK4, SwiftUI, and WinUI 3. Ordered dithering happens on a small pixel grid; native controls provide text, input, layout, and accessibility. The default dither cell is 3 logical pixels.
 
-![GTK gallery rendered by the native OpenGL port](docs/gallery-gtk.png)
+Components default to [Future-Retro](docs/FUTURE-RETRO.md) styling: Near AI blue on void, every lit pixel one of four ramp steps chosen by ordered dither, dot-matrix bars, drifting cloud fields at 24 fps, and flat native buttons. dither-core's multi-hue tones remain available and pixel-identical to upstream.
+
+![SwiftUI gallery in the Future-Retro style](artifacts/swift-gallery.png)
 
 ```mermaid
 flowchart TD
@@ -15,7 +17,9 @@ flowchart TD
     Program --> GLSL[GTK4 / GLSL]
     Program --> Metal[SwiftUI / Metal]
     Program --> HLSL[WinUI 3 / Direct2D]
-    Upstream[dither-core 0.1.0] --> Fixtures[39 shared golden images]
+    Upstream[dither-core 0.1.0] --> Fixtures[39 upstream golden images]
+    VM[Reference VM] --> FR[35 Future-Retro golden images]
+    FR --> Parity
     GLSL --> Parity[Pixel parity tests]
     Metal --> Parity
     HLSL --> Parity
@@ -46,11 +50,12 @@ The GTK port loads system libepoxy through `libloading`; the older Rust `epoxy` 
 Inside a GTK application, construct a component and attach its native widget:
 
 ```rust
-use dither_gtk::{DitherGradient, ir::{Gradient, Tone}};
+use dither_gtk::{DitherBackground, install_future_retro_css, ir::{Background, Field, Tone}};
 use dither_gtk::gtk::prelude::*;
 
-let gradient = DitherGradient::new(Gradient::new(Tone::Blue));
-window.set_child(Some(gradient.widget()));
+install_future_retro_css(&window.display());
+let clouds = DitherBackground::new(Background::new(Field::Clouds, Tone::Near));
+window.set_child(Some(clouds.widget()));
 ```
 
 ## SwiftUI
@@ -67,9 +72,10 @@ The package builds its Metal resource for SwiftPM. If Xcode reports a missing Me
 ```swift
 import DitherKit
 
-DitherGradient(from: .blue, to: .pink, direction: .right)
+DitherGradient(from: .near, to: .ink, direction: .right)
     .frame(height: 120)
-DitherMeter(value: 0.65, label: "Capacity")
+DitherMeter(value: 0.65, label: "Capacity")   // Near AI blue dot matrix
+Button("Download") {}.buttonStyle(DitherButton())   // flat Near AI blue
 ```
 
 ## WinUI 3
@@ -88,8 +94,8 @@ Reference `windows/DitherKit.WinUI/DitherKit.WinUI.csproj` for controls or `wind
 using DitherKit.WinUI;
 
 var gradient = new DitherGradient { Width = 360, Height = 120 };
-gradient.SetOption("from", "blue");
-gradient.SetOption("to", "pink");
+gradient.SetOption("from", "near");
+gradient.SetOption("to", "ink");
 Content = gradient;
 ```
 
@@ -103,7 +109,7 @@ cargo run -p dither-golden -- ../fixtures --check
 cargo run -p dither-golden -- ../fixtures
 ```
 
-`--check` compares the reference VM against pinned upstream `dither-core = "=0.1.0"`, then verifies the committed scene parameters, encoded programs, and decoded PNG pixels without rewriting them. Swift and C# tests independently encode fixture parameters and compare display lists within `1e-4`. Platform golden tests compare shader output with the same PNGs.
+`--check` compares the reference VM against pinned upstream `dither-core = "=0.1.0"` for the 39 upstream scenes and against the committed PNGs for the 35 Future-Retro scenes, then verifies the committed scene parameters, encoded programs, and decoded PNG pixels without rewriting them. Swift and C# tests independently encode fixture parameters and compare display lists within `1e-4`. Platform golden tests compare shader output with the same PNGs.
 
 Logical shader tests permit a maximum channel difference of 2 and at most 1% nonidentical pixels. Tests use straight RGBA transport to avoid lossy unpremultiplication; normal output uses premultiplied alpha for native compositing. Swift additionally checks the production compositing path. See the [pixel-transport notes](docs/EXECUTION.md#review-and-pixel-transport).
 

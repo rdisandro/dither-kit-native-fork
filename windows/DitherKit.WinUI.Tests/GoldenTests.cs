@@ -50,12 +50,12 @@ public sealed class GoldenTests(ITestOutputHelper output)
             Assert.True(different <= w * h * .01, $"{name}: {different}/{w * h} differing pixels > 1%");
             count++;
         }
-        Assert.Equal(39, count);
+        Assert.Equal(74, count);
         if (Environment.GetEnvironmentVariable("DITHER_PROFILE") == "1")
             Profile(device, scenes.RootElement.GetProperty("scenes"));
     }
 
-    // Opt-in diagnostics only: correctness above always checks all 39 scenes.
+    // Opt-in diagnostics only: correctness above always checks every scene.
     // Both modes use this process, this WARP device and the current shader;
     // only CPU-cached program metadata versus the legacy GPU scan differs.
     private void Profile(CanvasDevice device, JsonElement scenes)

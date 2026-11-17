@@ -36,6 +36,8 @@ public struct Program: Equatable, Sendable {
         push(Op.dot, [Float(x), Float(y)] + rgba(ring) + rgba(center))
     }
     public mutating func bloom(_ radius: Int, _ strength: Float) { push(Op.bloom, [Float(radius), strength]) }
+    /// A Future-Retro bloom: opaque blue-ink glow, thinned by ordered dither.
+    public mutating func bloomRamp(_ radius: Int, _ strength: Float) { push(Op.bloom, [Float(radius), strength, glowRamp]) }
 }
 
 public enum Op {
@@ -45,5 +47,7 @@ public enum Op {
     public static let avatar: UInt32 = 12, swatch: UInt32 = 13, bloom: UInt32 = 14
 }
 public let NONE: Float = -1e9
+/// Optional third BLOOM argument selecting the Future-Retro blue-ink glow.
+public let glowRamp: Float = 1
 public func rgba(_ color: Rgba) -> [Float] { [Float(color.r), Float(color.g), Float(color.b), Float(color.a)] }
 public func tone(_ tone: Tone) -> [Float] { [tone.hue(), tone.chroma()] }

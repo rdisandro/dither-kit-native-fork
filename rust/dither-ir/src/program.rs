@@ -39,6 +39,10 @@ pub mod op {
 /// Sentinel stored in column tables for "no geometry in this column".
 pub const NONE: f32 = -1.0e9;
 
+/// Optional third BLOOM argument: glow pixels take the Near AI ramp's
+/// deepest step. Without it (the upstream form) glow fades the neighbor.
+pub const GLOW_RAMP: f32 = 1.0;
+
 /// A display list under construction.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Program {
@@ -95,6 +99,12 @@ impl Program {
 
     pub fn bloom(&mut self, radius: i32, strength: f32) {
         self.push(op::BLOOM, &[radius as f32, strength]);
+    }
+
+    /// A Future-Retro bloom: glow pixels are opaque blue-ink, thinned by
+    /// the ordered dither, instead of faded copies of their neighbor.
+    pub fn bloom_ramp(&mut self, radius: i32, strength: f32) {
+        self.push(op::BLOOM, &[radius as f32, strength, GLOW_RAMP]);
     }
 }
 

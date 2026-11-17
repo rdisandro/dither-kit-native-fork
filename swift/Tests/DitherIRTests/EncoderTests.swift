@@ -7,7 +7,7 @@ final class EncoderTests: XCTestCase {
         let root = URL(fileURLWithPath: #filePath).resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let document = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("fixtures/scenes.json"))) as? [String: Any])
         let scenes = try XCTUnwrap(document["scenes"] as? [[String: Any]])
-        XCTAssertEqual(scenes.count, 39)
+        XCTAssertEqual(scenes.count, 74)
         for scene in scenes {
             let expected = (scene["program"] as! [NSNumber]).map(\.floatValue)
             // Expected floats are used only for comparison; the encoder receives options.
@@ -155,7 +155,9 @@ private func encodeScene(_ s: [String: Any]) throws -> Program {
         return b.encode(w: w, h: h, time: f("time"))
     case "button": return button(w: w, h: h, tone: tone(s["tone"]), style: ButtonStyle(rawValue: str("style"))!, density: f("density"), time: f("time"))
     case "meter": return meter(w: w, h: h, value: f("value"), tone: tone(s["tone"]), fill: Fill(rawValue: str("fill"))!)
-    case "avatar": return avatar(name: str("text"), hue: (s["hue"] as? NSNumber)?.floatValue)
+    case "avatar":
+        if let t = tones("tone") { return avatar(name: str("text"), tone: t) }
+        return avatar(name: str("text"), hue: (s["hue"] as? NSNumber)?.floatValue)
     case "swatch": return swatch(tone: tone(s["tone"]))
     case "sparkline": return sparkline(values: (s["values"] as! [NSNumber]).map(\.doubleValue), tone: tone(s["tone"]), w: w, h: h, hovered: s["hovered"] as! Bool, progress: f("progress"))
     case "cartesian":

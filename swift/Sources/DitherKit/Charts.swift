@@ -19,6 +19,7 @@ public struct DitherLegend: View {
             }
             .buttonStyle(.plain)
             .font(.caption)
+            .foregroundStyle(FutureRetro.silver)
             .accessibilityLabel(item.label)
             .accessibilityValue(item.hidden ? "Hidden" : "Visible")
             .accessibilityHint("Toggle series visibility")
@@ -60,13 +61,13 @@ public struct DitherChart: View {
             if !labels.isEmpty { xAxis.padding(.leading, 50) }
             DitherLegend(series: legendSeries, selected: $selected).padding(.leading, 50)
         }
-        .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.9)) { appeared = true } }
+        .onAppear { withAnimation(reduceMotion ? nil : FutureRetro.reveal) { appeared = true } }
     }
     private var yAxis: some View {
         GeometryReader { geometry in
             let scale = options.scale()
             ForEach(scale.ticks, id: \.self) { tick in
-                Text(formatValue(tick)).font(.caption2).foregroundStyle(.secondary)
+                Text(formatValue(tick)).font(.system(size: 10, design: .monospaced)).foregroundStyle(FutureRetro.pewter)
                     .position(x: 21, y: CGFloat(1 - tick / scale.max) * max(0, geometry.size.height - cell))
             }
         }
@@ -76,7 +77,7 @@ public struct DitherChart: View {
         GeometryReader { geometry in
             let width = max(0, Int(geometry.size.width / cell))
             ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                Text(label).font(.caption2).foregroundStyle(.secondary)
+                Text(label).font(.system(size: 10, design: .monospaced)).textCase(.uppercase).foregroundStyle(FutureRetro.pewter)
                     .position(x: CGFloat(options.columnX(index, w: width)) * cell + cell / 2, y: 8)
             }
         }
@@ -116,15 +117,16 @@ private struct ChartTooltip: View {
     let index: Int
     let label: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).fontWeight(.semibold)
-            ForEach(Array(series.enumerated()), id: \.offset) { _, item in
-                if !item.hidden && item.values.indices.contains(index) {
-                    HStack { DitherSwatch(item.tone); Text(item.label); Spacer(); Text(formatValue(item.values[index])).monospacedDigit() }
+        TerminalPanel {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label).textCase(.uppercase).foregroundStyle(FutureRetro.terminalDim)
+                ForEach(Array(series.enumerated()), id: \.offset) { _, item in
+                    if !item.hidden && item.values.indices.contains(index) {
+                        HStack { DitherSwatch(item.tone); Text(item.label); Spacer(); Text(formatValue(item.values[index])).monospacedDigit() }
+                    }
                 }
             }
         }
-        .font(.caption).padding(8).background(.regularMaterial, in: .rect(cornerRadius: 6))
     }
 }
 
@@ -156,7 +158,7 @@ public struct DitherPie: View {
                 }
                 .overlay {
                     if showsTotal && pie.innerRadius > 0.25 {
-                        VStack { Text(hover.flatMap { pie.slices.indices.contains($0) ? pie.slices[$0].label : nil } ?? "Total").font(.caption); Text(formatValue(hover.flatMap { pie.slices.indices.contains($0) ? pie.slices[$0].value : nil } ?? pie.slices.reduce(0) { $0 + max($1.value, 0) })).font(.headline).monospacedDigit() }
+                        VStack(spacing: 2) { Text(hover.flatMap { pie.slices.indices.contains($0) ? pie.slices[$0].label : nil } ?? "Total").ditherLabel(); Text(formatValue(hover.flatMap { pie.slices.indices.contains($0) ? pie.slices[$0].value : nil } ?? pie.slices.reduce(0) { $0 + max($1.value, 0) })).font(.system(size: 17, weight: .semibold, design: .monospaced)).foregroundStyle(FutureRetro.marble) }
                             .allowsHitTesting(false)
                     }
                 }
@@ -166,13 +168,13 @@ public struct DitherPie: View {
             HStack(spacing: 12) {
                 ForEach(Array(pie.slices.enumerated()), id: \.offset) { index, slice in
                     Button { hover = hover == index ? nil : index } label: { HStack(spacing: 4) { DitherSwatch(slice.tone); Text(slice.label) } }
-                        .buttonStyle(.plain).font(.caption)
+                        .buttonStyle(.plain).font(.caption).foregroundStyle(FutureRetro.silver)
                         .accessibilityValue(formatValue(slice.value))
                         .onHover { hover = $0 ? index : nil }
                 }
             }
         }
-        .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.9)) { appeared = true } }
+        .onAppear { withAnimation(reduceMotion ? nil : FutureRetro.reveal) { appeared = true } }
     }
 }
 
@@ -207,7 +209,7 @@ public struct DitherRadar: View {
                         if geo.axisTips.indices.contains(index) {
                             let tip = geo.axisTips[index]
                             let dx = tip.0 - geo.center.0, dy = tip.1 - geo.center.1
-                            Text(label).font(.caption2).position(x: 30 + CGFloat(tip.0) * cell + CGFloat(dx) / CGFloat(max(geo.radius, 1)) * 15, y: 30 + CGFloat(tip.1) * cell + CGFloat(dy) / CGFloat(max(geo.radius, 1)) * 15)
+                            Text(label).font(.system(size: 10, design: .monospaced)).textCase(.uppercase).foregroundStyle(FutureRetro.pewter).position(x: 30 + CGFloat(tip.0) * cell + CGFloat(dx) / CGFloat(max(geo.radius, 1)) * 15, y: 30 + CGFloat(tip.1) * cell + CGFloat(dy) / CGFloat(max(geo.radius, 1)) * 15)
                         }
                     }
                 }
@@ -217,7 +219,7 @@ public struct DitherRadar: View {
             }
             DitherLegend(series: Binding(get: { options.series }, set: { values in visibility.update(from: values) }), selected: $selected)
         }
-        .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.9)) { appeared = true } }
+        .onAppear { withAnimation(reduceMotion ? nil : FutureRetro.reveal) { appeared = true } }
     }
 }
 

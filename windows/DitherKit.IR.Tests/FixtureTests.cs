@@ -29,5 +29,5 @@ public sealed class FixtureTests
     }
 
     [Fact]
-    public void FixtureCoversAll39Scenes() => Assert.Equal(39, Scenes().Count());
+    public void FixtureCoversAllScenes() => Assert.Equal(74, Scenes().Count());
 }

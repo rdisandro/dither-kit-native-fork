@@ -1,6 +1,6 @@
 # dither-kit-native: plan and status
 
-The original roadmap is preserved below. For current implementation and validation status, see [README.md](README.md) and [execution evidence](docs/EXECUTION.md).
+The original roadmap is preserved below. For current implementation and validation status, see [README.md](README.md) and [execution evidence](docs/EXECUTION.md). The Future-Retro styles and effects (ramp tones, the dot-matrix fill, light fields 5–8, blue-ink bloom) are specified in [docs/FUTURE-RETRO.md](docs/FUTURE-RETRO.md) and [spec/SPEC.md](spec/SPEC.md).
 
 This repo holds native ports of [dither-kit-rs](https://github.com/DeepanshuMishraa/dither-kit-rs) for three toolkits:
 
@@ -38,7 +38,7 @@ component options ──(CPU encoder, per language)──► display-list progra
   - The **base** list is every op before `BLOOM`. Bloom is applied to its result.
   - The **overlay** list is every op after `BLOOM`. It is painted on top after bloom. Chart hover crosshairs and dots go here.
   - When there is no `BLOOM` op, the whole program is the base list.
-- Constant colors are 4 floats holding RGBA in 0..255. Varying colors are a tone, stored as `(hue, chroma)`. Shaders compute the OKLCH shade per pixel.
+- Constant colors are 4 floats holding RGBA in 0..255. Varying colors are a tone, stored as `(hue, chroma)`. Shaders compute the OKLCH shade per pixel. A negative chroma names a Future-Retro ramp (`-1` Near AI blue, `-2` ink), dithered between its four fixed steps.
 - In column tables, `NONE = -1e9` means "no geometry in this column".
 
 | op | id | args |
@@ -54,15 +54,15 @@ component options ──(CPU encoder, per language)──► display-list progra
 | BACKGROUND | 9 | w h field matrix density time h c has_accent acc_h acc_c |
 | BUTTON | 10 | w h style density time h c (sparkles included) |
 | METER | 11 | w h value fill h c |
-| AVATAR | 12 | bits_lo16 bits_hi16 mirror_x hue acc_lo16 acc_hi (always rendered as an 8×8 grid) |
+| AVATAR | 12 | bits_lo16 bits_hi16 mirror_x hue acc_lo16 acc_hi (always rendered as an 8×8 grid; hue < 0 names a ramp) |
 | SWATCH | 13 | h c |
-| BLOOM | 14 | radius strength (radius 0 just marks where the overlay starts) |
+| BLOOM | 14 | radius strength [glow] (radius 0 just marks where the overlay starts; glow 1 = Future-Retro blue-ink) |
 
 Enum ids:
 - matrix: bayer2 = 0, bayer4 = 1, bayer8 = 2, halftone = 3, noise = 4
-- fill: gradient = 0, dotted = 1, hatched = 2, solid = 3
+- fill: gradient = 0, dotted = 1, hatched = 2, solid = 3, matrix = 4 (Future-Retro dot matrix)
 - direction: up = 0, down = 1, left = 2, right = 3, radial = 4
-- field: plasma = 0, waves = 1, ripple = 2, noise = 3, aurora = 4
+- field: plasma = 0, waves = 1, ripple = 2, noise = 3, aurora = 4, clouds = 5, marble = 6, rings = 7, caustics = 8 (5–8 are Future-Retro)
 - button style: solid = 0, outline = 1, ghost = 2
 - bloom (radius, strength): low = (1, .45), high = (2, .6), aura = (4, .7)
 

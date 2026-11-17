@@ -6,7 +6,9 @@ public enum Matrix: String, CaseIterable, Sendable {
     public func id() -> Float { Float(Self.allCases.firstIndex(of: self)!) }
 }
 public enum Fill: String, CaseIterable, Sendable {
-    case gradient, dotted, hatched, solid
+    /// `matrix` is the Future-Retro dot matrix: one dot per two cells, lit
+    /// from the axis, unlit dots a faint grid in bars and meters.
+    case gradient, dotted, hatched, solid, matrix
     public static let all = allCases
     public func id() -> Float { Float(Self.allCases.firstIndex(of: self)!) }
 }
@@ -14,21 +16,49 @@ public enum Bloom: String, CaseIterable, Sendable {
     case off, low, high, aura
     public static let all = allCases
     public func params() -> (Int, Float) { switch self { case .off: (0, 0); case .low: (1, 0.45); case .high: (2, 0.6); case .aura: (4, 0.7) } }
-    func emit(_ p: inout Program) { if self != .off { let (r, s) = params(); p.bloom(r, s) } }
+    func emit(_ p: inout Program, ramp: Bool) {
+        if self != .off { let (r, s) = params(); if ramp { p.bloomRamp(r, s) } else { p.bloom(r, s) } }
+    }
 }
 public enum Direction: String, CaseIterable, Sendable {
     case up, down, left, right, radial
     public func id() -> Float { Float(Self.allCases.firstIndex(of: self)!) }
 }
+/// Background fields: dither-core's five, then Future-Retro's (clouds is
+/// the house field), evolved in absolute grid units.
 public enum Field: String, CaseIterable, Sendable {
-    case plasma, waves, ripple, noise, aurora
+    case plasma, waves, ripple, noise, aurora, clouds, marble, rings, caustics
     public static let all = allCases
+    public static let light: [Field] = [.clouds, .marble, .rings, .caustics]
     public func id() -> Float { Float(Self.allCases.firstIndex(of: self)!) }
+    public var isLight: Bool { id() >= 5 }
+    public func defaultDensity() -> Float { isLight ? 1 : 0.6 }
 }
+/// Future-Retro field energy: phase advances `energy * 4` per second and
+/// eases between idle and hover over about 200 ms.
+public struct Energy: Equatable, Sendable {
+    public var idle: Float, hover: Float
+    public init(idle: Float, hover: Float) { self.idle = idle; self.hover = hover }
+    public static let field = Energy(idle: 0.18, hover: 0.32)
+    public static let card = Energy(idle: 0.12, hover: 0.28)
+    public func step(phase: Float, energy: Float, hovered: Bool, dt: Float) -> (phase: Float, energy: Float) {
+        let target = hovered ? hover : idle
+        let energy = energy + (target - energy) * min(dt / 0.2, 1)
+        return (phase + dt * energy * 4, energy)
+    }
+}
+/// Future-Retro motion: film-rate canvases, a still frame, quick and reveal durations.
+public enum Motion {
+    public static let filmFPS: Double = 24
+    public static let stillPhase: Float = 3
+    public static let reveal: Double = 0.6
+    public static let quick: Double = 0.16
+}
+public func easeOutCubic(_ t: Float) -> Float { let t = clamp(t, 0, 1); let k = 1 - t; return 1 - k * k * k }
 public struct Gradient: Equatable, Sendable {
     public var from: Tone, to: Tone?
     public var direction: Direction = .up
-    public var matrix: Matrix = .bayer8
+    public var matrix: Matrix = .bayer4
     public var density: Float = 1
     public init(from: Tone) { self.from = from }
     public func encode(w: Int, h: Int) -> Program {
@@ -39,9 +69,9 @@ public struct Gradient: Equatable, Sendable {
 }
 public struct Background: Equatable, Sendable {
     public var field: Field, tone: Tone, accent: Tone?
-    public var matrix: Matrix = .bayer8
-    public var density: Float = 0.6
-    public init(field: Field, tone: Tone) { self.field = field; self.tone = tone }
+    public var matrix: Matrix = .bayer4
+    public var density: Float
+    public init(field: Field, tone: Tone) { self.field = field; self.tone = tone; self.density = field.defaultDensity() }
     public func encode(w: Int, h: Int, time: Float) -> Program {
         var p = Program()
         p.push(Op.background, [Float(w), Float(h), field.id(), matrix.id(), clamp(density, 0, 1), time, tone.hue(), tone.chroma(), accent == nil ? 0 : 1, accent?.hue() ?? 0, accent?.chroma() ?? 0])
@@ -55,7 +85,28 @@ public enum ButtonStyle: String, CaseIterable, Sendable {
         let values: (Float, Float, Float) = switch self { case .solid: (0.32, 0.55, 0.85); case .outline: (0, 0.3, 0.6); case .ghost: (0, 0.25, 0.5) }
         return pressed ? values.2 : hovered ? values.1 : values.0
     }
-    public func surface(tone: Tone) -> Rgba? { self == .solid ? tone.shade(0.22) : nil }
+    public func surface(tone: Tone) -> Rgba? { self == .solid ? (tone.isRamp ? tone.base() : tone.shade(0.22)) : nil }
+    /// Native chrome for a Future-Retro button: flat fills, no texture.
+    public func chrome(tone: Tone, hovered: Bool, pressed: Bool) -> ButtonChrome {
+        let hot = hovered || pressed, base = tone.base()
+        switch self {
+        case .solid: return ButtonChrome(fill: hot ? base.mix(.white, 0.12) : base, border: nil, label: Palette.void, glow: base.fade(hot ? 0.8 : 0.65), underline: nil)
+        case .outline: return ButtonChrome(fill: hot ? Palette.marble : nil, border: Palette.marble, label: hot ? Palette.void : Palette.marble, glow: nil, underline: nil)
+        case .ghost: return ButtonChrome(fill: nil, border: nil, label: hot ? base : Palette.marble, glow: nil, underline: base)
+        }
+    }
+}
+public struct ButtonChrome: Equatable, Sendable {
+    public var fill: Rgba?
+    public var border: Rgba?
+    public var label: Rgba
+    public var glow: Rgba?
+    public var underline: Rgba?
+    public init(fill: Rgba?, border: Rgba?, label: Rgba, glow: Rgba?, underline: Rgba?) {
+        self.fill = fill; self.border = border; self.label = label; self.glow = glow; self.underline = underline
+    }
+    /// Glow (y offset, blur radius) in points, after the app's tab bar.
+    public static func glowGeometry(hovered: Bool) -> (y: Float, radius: Float) { hovered ? (18, 36) : (14, 30) }
 }
 public func button(w: Int, h: Int, tone t: Tone, style: ButtonStyle, density: Float, time: Float) -> Program {
     var p = Program(); p.push(Op.button, [Float(w), Float(h), style.id(), density, time] + tone(t)); return p
@@ -69,13 +120,22 @@ public func fnv1a(_ bytes: [UInt8]) -> UInt64 {
     for b in bytes { h ^= UInt64(b); h = h &* 0x00000100000001b3 }
     return h
 }
+/// An identicon in one tone; a Future-Retro ramp lights it in its pigment,
+/// accents it in its bright tint, and leaves the rest slate.
+public func avatar(name: String, tone: Tone) -> Program {
+    guard let id = tone.ramp else { return avatar(name: name, hue: tone.hue()) }
+    return avatarProgram(name: name, hueSlot: -Float(id))
+}
 public func avatar(name: String, hue: Float? = nil) -> Program {
+    let hash = fnv1a(Array(name.utf8))
+    return avatarProgram(name: name, hueSlot: Tone.hue(hue ?? Float((hash >> 33) % 180) * 2).hue())
+}
+private func avatarProgram(name: String, hueSlot: Float) -> Program {
     let hash = fnv1a(Array(name.utf8)), bits = UInt32(truncatingIfNeeded: hash)
     let mirror = (hash >> 32) & 1 == 0
-    let hue = hue ?? Float((hash >> 33) % 180) * 2
     let acc = UInt32(truncatingIfNeeded: hash >> 41) & 0x7fffff
     var p = Program()
-    p.push(Op.avatar, [Float(bits & 0xffff), Float(bits >> 16), mirror ? 1 : 0, Tone.hue(hue).hue(), Float(acc & 0xffff), Float(acc >> 16)])
+    p.push(Op.avatar, [Float(bits & 0xffff), Float(bits >> 16), mirror ? 1 : 0, hueSlot, Float(acc & 0xffff), Float(acc >> 16)])
     return p
 }
 public struct Series: Equatable, Sendable {
@@ -120,6 +180,8 @@ public func interpolate(values: [Double], f: Float) -> Double {
     return clamp(v, min(p1, p2), max(p1, p2))
 }
 public func guide() -> Rgba { Tone.grey.shade(0.55).fade(0.45) }
+/// Future-Retro rules: faint ink hairlines.
+public func rule() -> Rgba { Palette.rule }
 public enum CartesianKind: String, CaseIterable, Sendable { case area, line, bar }
 public struct Cartesian: Sendable {
     public var kind: CartesianKind, series: [Series]
@@ -157,19 +219,22 @@ public struct Cartesian: Sendable {
         if i >= Float(n - 1) { return n - 1 }
         return Int(i)
     }
+    /// Future-Retro chrome when any series uses a ramp tone.
+    public var isRamp: Bool { series.contains { $0.tone.isRamp } }
     private func alphaFor(_ index: Int) -> Float { selected != nil && selected != index ? 0.3 : 1 }
     private func stackBelow(_ si: Int, _ i: Int) -> Double { series[..<si].filter { !$0.hidden }.reduce(0) { $0 + ($1.values.indices.contains(i) ? $1.values[i] : 0) } }
     public func encode(w: Int, h: Int) -> Program {
         var p = Program()
         guard w >= 2 && h >= 2 else { return p }
-        let scale = scale()
-        if gridLines { for t in scale.ticks.dropFirst() { let y = pixel(scale.y(t, h: h).rounded()); p.line((0, y), (w - 1, y), color: guide(), dash: 3) } }
-        if baseline { p.line((0, h - 1), (w - 1, h - 1), color: guide(), dash: 2) }
+        let scale = scale(), ramp = isRamp
+        let (grid, gridDash, baseDash): (Rgba, UInt32, UInt32) = ramp ? (rule(), 2, 1) : (guide(), 3, 2)
+        if gridLines { for t in scale.ticks.dropFirst() { let y = pixel(scale.y(t, h: h).rounded()); p.line((0, y), (w - 1, y), color: grid, dash: gridDash) } }
+        if baseline { p.line((0, h - 1), (w - 1, h - 1), color: grid, dash: baseDash) }
         if kind == .bar { encodeBars(&p, scale, w, h) } else { encodeCurves(&p, scale, w, h) }
         if kind != .bar, let hover, hover >= 0 && hover < count {
-            if bloom == .off { p.bloom(0, 0) } else { bloom.emit(&p) }
+            if bloom == .off { p.bloom(0, 0) } else { bloom.emit(&p, ramp: ramp) }
             encodeHover(&p, scale, w, h)
-        } else { bloom.emit(&p) }
+        } else { bloom.emit(&p, ramp: ramp) }
         return p
     }
     private func encodeCurves(_ p: inout Program, _ scale: Scale, _ w: Int, _ h: Int) {
@@ -210,12 +275,13 @@ public struct Cartesian: Sendable {
     }
     private func encodeHover(_ p: inout Program, _ scale: Scale, _ w: Int, _ h: Int) {
         guard let i = hover, i >= 0 && i < count else { return }
-        let x = pixel(columnX(i, w: w).rounded())
-        p.line((x, 0), (x, h - 1), color: Tone.grey.shade(0.75).fade(0.7), dash: 2)
+        let x = pixel(columnX(i, w: w).rounded()), ramp = isRamp
+        p.line((x, 0), (x, h - 1), color: ramp ? Palette.nearBlue : Tone.grey.shade(0.75).fade(0.7), dash: 2)
         for (si, s) in series.enumerated() where !s.hidden && s.values.indices.contains(i) {
             let b = stacked ? stackBelow(si, i) : 0
             let y = pixel(scale.y(b + s.values[i], h: h).rounded())
-            p.dot(x, y, ring: s.tone.shade(0.7), center: s.tone.shade(0.98))
+            if ramp { p.dot(x, y, ring: s.tone.base(), center: Palette.marble) }
+            else { p.dot(x, y, ring: s.tone.shade(0.7), center: s.tone.shade(0.98)) }
         }
     }
     private func encodeBars(_ p: inout Program, _ scale: Scale, _ w: Int, _ h: Int) {
@@ -285,7 +351,7 @@ public struct Pie: Sendable {
         for (s, angles) in zip(slices, geo.angles) { table += [angles.0, angles.1] + tone(s.tone) + [s.fill.id()] }
         let offset = p.table(table)
         p.push(Op.pie, [geo.center.0, geo.center.1, geo.radius, geo.inner, slices.count > 1 ? 1 : 0, hover.map(Float.init) ?? -1, Float(slices.count), offset])
-        bloom.emit(&p)
+        bloom.emit(&p, ramp: slices.contains { $0.tone.isRamp })
         return p
     }
 }
@@ -319,11 +385,13 @@ public struct Radar: Sendable {
             let (tx, ty) = geo.axisTips[i % n]
             return (pixel((geo.center.0 + (tx - geo.center.0) * f).rounded()), pixel((geo.center.1 + (ty - geo.center.1) * f).rounded()))
         }
+        let ramp = series.contains { $0.tone.isRamp }
+        let (ringColor, ringDash, spokeDash): (Rgba, UInt32, UInt32) = ramp ? (rule(), 2, 2) : (guide(), 2, 3)
         for ring in 1...Swift.max(rings, 1) {
             let f = Float(ring) / Float(Swift.max(rings, 1))
-            for i in 0..<n { p.line(at(i, f), at(i + 1, f), color: guide(), dash: 2) }
+            for i in 0..<n { p.line(at(i, f), at(i + 1, f), color: ringColor, dash: ringDash) }
         }
-        for i in 0..<n { p.line(c, at(i, 1), color: guide(), dash: 3) }
+        for i in 0..<n { p.line(c, at(i, 1), color: ringColor, dash: spokeDash) }
         let maximum = max ?? Scale.nice(max: series.flatMap(\.values).reduce(0, Swift.max), count: rings).max
         let prog = clamp(progress, 0, 1)
         for (si, s) in series.enumerated() where !s.hidden {
@@ -343,7 +411,7 @@ public struct Radar: Sendable {
             }
             for (x, y) in pts { p.dot(pixel(x.rounded()), pixel(y.rounded()), ring: stroke, center: s.tone.shade(0.97).fade(alpha)) }
         }
-        bloom.emit(&p)
+        bloom.emit(&p, ramp: ramp)
         return p
     }
 }

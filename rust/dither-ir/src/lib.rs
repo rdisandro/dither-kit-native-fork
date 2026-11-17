@@ -13,6 +13,6 @@ pub mod encode;
 pub mod program;
 pub mod vm;
 
-pub use color::{Rgba, Tone};
+pub use color::{Rgba, Tone, palette, ramp_color};
 pub use encode::*;
 pub use program::Program;

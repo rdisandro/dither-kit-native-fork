@@ -29,12 +29,20 @@ public static class Encoder
     }
     public static DitherProgram Avatar(string name, float? hue = null)
     {
+        var h = Fnv1a(Encoding.UTF8.GetBytes(name));
+        return AvatarProgram(name, Tone.FromHue(hue ?? (float)((h >> 33) % 180) * 2f).Hue);
+    }
+    /// <summary>An identicon in one tone; a Future-Retro ramp lights it in its pigment,
+    /// accents it in its bright tint, and leaves the rest slate.</summary>
+    public static DitherProgram Avatar(string name, Tone tone) =>
+        tone.Ramp is { } id ? AvatarProgram(name, -id) : Avatar(name, tone.Hue);
+    private static DitherProgram AvatarProgram(string name, float hueSlot)
+    {
         var h = Fnv1a(Encoding.UTF8.GetBytes(name)); var bits = (uint)h;
         var mirror = ((h >> 32) & 1) == 0;
-        var color = hue ?? (float)((h >> 33) % 180) * 2f;
         var acc = (uint)(h >> 41) & 0x7fffff;
         var p = new DitherProgram();
-        p.Push(Op.Avatar, bits & 0xffff, bits >> 16, mirror ? 1 : 0, Tone.FromHue(color).Hue, acc & 0xffff, acc >> 16);
+        p.Push(Op.Avatar, bits & 0xffff, bits >> 16, mirror ? 1 : 0, hueSlot, acc & 0xffff, acc >> 16);
         return p;
     }
     public static string FormatValue(double value)
@@ -67,6 +75,8 @@ public static class Encoder
         return Math.Clamp(v, Math.Min(p1, p2), Math.Max(p1, p2));
     }
     public static Rgba Guide() => Tone.Grey.Shade(.55f).Fade(.45f);
+    /// <summary>Future-Retro rules: faint ink hairlines.</summary>
+    public static Rgba Rule() => Palette.Rule;
     public static DitherProgram Sparkline(IReadOnlyList<double> values, Tone tone, int w, int h, bool hovered = false, float progress = 1)
     {
         // Rust f64::min ignores NaN samples; LINQ Min propagates them.
@@ -85,22 +95,25 @@ public static class Encoder
         ArgumentNullException.ThrowIfNull(properties);
         var p = new Properties(properties);
         var w = p.Int("w", 64); var h = p.Int("h", 24);
-        var t = p.Tone("tone", IR.Tone.Green);
+        var t = p.Tone("tone", IR.Tone.Near);
         var bloom = p.Enum("bloom", Bloom.Off);
         var progress = p.Float("progress", 1);
         switch (component.ToLowerInvariant())
         {
             case "gradient":
                 return new Gradient(p.Tone("from", t)) { To = p.OptionalTone("to"), Direction = p.Enum("direction", Direction.Up),
-                    Matrix = p.Enum("matrix", Matrix.Bayer8), Density = p.Float("density", 1) }.Encode(w, h);
+                    Matrix = p.Enum("matrix", Matrix.Bayer4), Density = p.Float("density", 1) }.Encode(w, h);
             case "background":
-                return new Background(p.Enum("field", Field.Plasma), t) { Accent = p.OptionalTone("accent"),
-                    Matrix = p.Enum("matrix", Matrix.Bayer8), Density = p.Float("density", .6f) }.Encode(w, h, p.Float("time", 0));
+                var field = p.Enum("field", Field.Clouds);
+                return new Background(field, t) { Accent = p.OptionalTone("accent"),
+                    Matrix = p.Enum("matrix", Matrix.Bayer4), Density = p.Float("density", field.DefaultDensity()) }.Encode(w, h, p.Float("time", 0));
             case "button":
                 var style = p.Enum("style", ButtonStyle.Solid);
                 return Button(w, h, t, style, p.Float("density", style.Density(p.Bool("hovered"), p.Bool("pressed"))), p.Float("time", 0));
             case "meter": return Meter(w, h, p.Float("value", 0), t, p.Enum("fill", Fill.Gradient));
-            case "avatar": return Avatar(p.String("text", ""), p.OptionalFloat("hue"));
+            case "avatar":
+                return p.OptionalTone("tone") is { } avatarTone ? Avatar(p.String("text", ""), avatarTone)
+                    : Avatar(p.String("text", ""), p.OptionalFloat("hue"));
             case "swatch": return Swatch(t);
             case "sparkline": return Sparkline(p.Doubles("values"), t, w, h, p.Bool("hovered"), progress);
             case "cartesian": case "area": case "line": case "bar":
@@ -152,10 +165,10 @@ public static class Encoder
             return json.EnumerateArray().Select(v => new Properties(v.EnumerateObject().ToDictionary(k => k.Name, k => (object?)k.Value.Clone()))).ToArray();
         }
         public IReadOnlyList<Series> Series() => Get("series") is IReadOnlyList<IR.Series> typed ? typed
-            : Objects("series").Select(p => new IR.Series(p.String("label", ""), p.Tone("tone", IR.Tone.Green), p.Doubles("values"))
+            : Objects("series").Select(p => new IR.Series(p.String("label", ""), p.Tone("tone", IR.Tone.Near), p.Doubles("values"))
                 { Fill = p.Enum("fill", Fill.Gradient), Hidden = p.Bool("hidden") }).ToArray();
         public IReadOnlyList<Slice> Slices() => Get("slices") is IReadOnlyList<Slice> typed ? typed
-            : Objects("slices").Select(p => new Slice(p.String("label", ""), p.OptionalDouble("value") ?? 0, p.Tone("tone", IR.Tone.Green))
+            : Objects("slices").Select(p => new Slice(p.String("label", ""), p.OptionalDouble("value") ?? 0, p.Tone("tone", IR.Tone.Near))
                 { Fill = p.Enum("fill", Fill.Gradient) }).ToArray();
     }
 }

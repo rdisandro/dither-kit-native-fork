@@ -11,10 +11,10 @@ final class GoldenTests: XCTestCase {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("fixtures")
     }
 
-    @MainActor func testAll39MetalGoldenImages() throws {
+    @MainActor func testAllMetalGoldenImages() throws {
         XCTAssertNotNil(MTLCreateSystemDefaultDevice(), "Metal is required: this test must run on a macOS host with GPU access")
         let scenes = try JSONDecoder().decode(Fixtures.self, from: Data(contentsOf: fixturesURL.appendingPathComponent("scenes.json"))).scenes
-        XCTAssertEqual(scenes.count, 39, "Every shared fixture must participate")
+        XCTAssertEqual(scenes.count, 74, "Every shared fixture must participate")
         var renderedCount = 0
         for scene in scenes {
             let renderer = ImageRenderer(content: DitherSurface(testProgram: scene.program, cell: 1).frame(width: CGFloat(scene.w), height: CGFloat(scene.h)))
@@ -44,7 +44,7 @@ final class GoldenTests: XCTestCase {
             XCTAssertLessThanOrEqual(ratio, 0.01, "\(scene.name): \(differingPixels)/\(scene.w * scene.h) pixels differ (maximum \(maximumDifference)); shaders must render, never skip")
             renderedCount += 1
         }
-        XCTAssertEqual(renderedCount, 39)
+        XCTAssertEqual(renderedCount, 74)
     }
 
     @MainActor func testProductionPremultipliedCompositing() throws {
@@ -71,7 +71,7 @@ final class GoldenTests: XCTestCase {
             XCTAssertLessThanOrEqual(maximumDifference, 2, "\(scene.name): production compositing must match premultiplied golden bytes")
             tested += 1
         }
-        XCTAssertEqual(tested, 39)
+        XCTAssertEqual(tested, 74)
     }
 
     /// Test transport emits straight RGBA in both passes. Read raw bytes so

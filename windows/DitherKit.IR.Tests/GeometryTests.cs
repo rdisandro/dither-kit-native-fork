@@ -6,12 +6,27 @@ namespace DitherKit.IR.Tests;
 public sealed class GeometryTests
 {
     [Fact]
-    public void DefaultToneIsRustGreen()
+    public void DefaultToneIsRustNear()
     {
-        Assert.Equal(Tone.Green, default(Tone));
+        Assert.Equal(Tone.Near, default(Tone));
         Assert.NotEqual(Tone.Green, Tone.FromHue(150));
-        Assert.Equal(150, default(Tone).Hue);
-        Assert.Equal(Tone.Green.Shade(.55f), default(Tone).Base);
+        Assert.Equal(-1, default(Tone).Chroma);
+        Assert.Equal(Palette.NearBlue, default(Tone).Base);
+    }
+
+    [Fact]
+    public void RampTonesShadeToTheirNearestStep()
+    {
+        Assert.Equal(Palette.NearSky, Tone.Near.Shade(.78f));
+        Assert.Equal(Palette.Marble, Tone.Near.Shade(1));
+        Assert.Equal(Palette.Pewter, Tone.Ink.Base);
+        Assert.Equal(Tone.Ink, Tone.Parse(" Ink "));
+        Assert.Equal(Palette.NearBlueHover, Palette.NearBlue.Mix(Rgba.White, .12f));
+        var chrome = ButtonStyle.Solid.Chrome(Tone.Near, hovered: true, pressed: false);
+        Assert.Equal(Palette.NearBlueHover, chrome.Fill);
+        Assert.Equal(Palette.Void, chrome.Label);
+        var energy = Energy.Field.Step(0, Energy.Field.Idle, hovered: true, dt: .1f);
+        Assert.Equal(.25f, energy.Energy, 5);
     }
 
     [Fact]

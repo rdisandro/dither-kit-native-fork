@@ -109,13 +109,82 @@ fn oklch_to_srgb(l: f32, c: f32, h: f32) -> Option<Rgba> {
     Some(Rgba::rgb(enc(r), enc(g), enc(bb)))
 }
 
+/// Future-Retro palette tokens (`brand/tokens/tokens.css` in nearai/future-retro).
+///
+/// One field (void) and one pigment (Near AI blue). Lit pixels in a
+/// Future-Retro surface are always one of the four steps of a ramp, chosen
+/// per pixel with an ordered Bayer dither; there are no in-between colors.
+pub mod palette {
+    use super::Rgba;
+
+    /// The field: page, sections, canvases.
+    pub const VOID: Rgba = Rgba::hex(0x070708);
+    /// Raised surface: cards, plates.
+    pub const OBSIDIAN: Rgba = Rgba::hex(0x0F0F11);
+    /// Panels.
+    pub const BASALT: Rgba = Rgba::hex(0x18181B);
+    /// Hairline rules and borders.
+    pub const SLATE: Rgba = Rgba::hex(0x26262B);
+    /// Muted text (5.14:1 on void).
+    pub const PEWTER: Rgba = Rgba::hex(0x808088);
+    /// Body ink (11.19:1 on void).
+    pub const SILVER: Rgba = Rgba::hex(0xC1C1C1);
+    /// Strong ink and the brightest step of every ramp (19.26:1 on void).
+    pub const MARBLE: Rgba = Rgba::hex(0xFAFAF7);
+    /// The pigment: accent, primary buttons, signals (6.20:1 on void).
+    pub const NEAR_BLUE: Rgba = Rgba::hex(0x0091FD);
+    /// The bright tint: glows and highlights.
+    pub const NEAR_SKY: Rgba = Rgba::hex(0x83DCFF);
+    /// A mid step: far signals.
+    pub const NEAR_DEEP_BLUE: Rgba = Rgba::hex(0x2385C7);
+    /// The deepest step of the canvas ramp. Never text (2.94:1).
+    pub const NEAR_BLUE_INK: Rgba = Rgba::hex(0x035CA3);
+    /// The primary button's hover fill: Near AI blue with 12% white mixed in.
+    pub const NEAR_BLUE_HOVER: Rgba = Rgba::hex(0x1F9EFD);
+    /// Unlit dots of a dot matrix: body ink at 9% (cc-dots), a faint grid.
+    pub const FAINT: Rgba = Rgba::new(0xC1, 0xC1, 0xC1, 23);
+    /// Chart rules and axes: body ink at 14% (the cc-dots axis). Below
+    /// bloom's alpha cutoff, so rules never glow.
+    pub const RULE: Rgba = Rgba::new(0xC1, 0xC1, 0xC1, 36);
+
+    /// The art ramp: transparent, then blue-ink, blue, sky, marble.
+    pub const NEAR_RAMP: [Rgba; 4] = [NEAR_BLUE_INK, NEAR_BLUE, NEAR_SKY, MARBLE];
+    /// The neutral ink ramp: slate, pewter, silver, marble.
+    pub const INK_RAMP: [Rgba; 4] = [SLATE, PEWTER, SILVER, MARBLE];
+}
+
+/// Ramp ids, stored in a program as a negative chroma (`-id`).
+pub const RAMP_NEAR: i32 = 1;
+pub const RAMP_INK: i32 = 2;
+
+/// Lit step `1..=4` of ramp `id`; any other step is the unlit slate.
+pub fn ramp_color(id: i32, step: i32) -> Rgba {
+    let ramp = if id == RAMP_INK { &palette::INK_RAMP } else { &palette::NEAR_RAMP };
+    match step {
+        1..=4 => ramp[step as usize - 1],
+        _ => palette::SLATE,
+    }
+}
+
+/// Continuous ramp position `1.0..=4.0` for a shade level: `0.3` is the
+/// deepest step, `0.55` the pigment, `0.8` the bright tint, `1.0` marble.
+pub fn ramp_position(level: f32) -> f32 {
+    (1.0 + (level - 0.3) * 4.0).clamp(1.0, 4.0)
+}
+
 /// A named dither color, or any hue in degrees.
 ///
-/// Each tone expands into a perceptual shade ramp via [`Tone::shade`], so
-/// every component gets matching dark, mid, and highlight colors.
+/// Each tone expands into a shade ramp via [`Tone::shade`], so every
+/// component gets matching dark, mid, and highlight colors. [`Tone::Near`]
+/// and [`Tone::Ink`] are the Future-Retro ramps: their shades are the four
+/// fixed steps of a ramp, ordered-dithered per pixel by the shaders.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum Tone {
+    /// Near AI blue: blue-ink, blue, sky, marble. The one pigment.
     #[default]
+    Near,
+    /// Neutral ink: slate, pewter, silver, marble.
+    Ink,
     Green,
     Blue,
     Purple,
@@ -128,7 +197,7 @@ pub enum Tone {
 }
 
 impl Tone {
-    /// The named tones, in legend order.
+    /// The upstream (dither-core) named tones, in legend order.
     pub const ALL: [Tone; 7] = [
         Tone::Green,
         Tone::Blue,
@@ -139,8 +208,13 @@ impl Tone {
         Tone::Grey,
     ];
 
+    /// The Future-Retro ramps, in legend order.
+    pub const RAMPS: [Tone; 2] = [Tone::Near, Tone::Ink];
+
     pub fn name(self) -> &'static str {
         match self {
+            Tone::Near => "near",
+            Tone::Ink => "ink",
             Tone::Green => "green",
             Tone::Blue => "blue",
             Tone::Purple => "purple",
@@ -152,10 +226,12 @@ impl Tone {
         }
     }
 
-    /// Parses a tone name (`"blue"`) or a hue number (`"210"`).
+    /// Parses a tone name (`"near"`, `"blue"`) or a hue number (`"210"`).
     pub fn parse(s: &str) -> Option<Tone> {
         let s = s.trim().to_ascii_lowercase();
         Some(match s.as_str() {
+            "near" | "near-blue" => Tone::Near,
+            "ink" => Tone::Ink,
             "green" => Tone::Green,
             "blue" => Tone::Blue,
             "purple" | "violet" => Tone::Purple,
@@ -167,8 +243,22 @@ impl Tone {
         })
     }
 
+    /// The Future-Retro ramp id, if this tone is a ramp.
+    pub fn ramp(self) -> Option<i32> {
+        match self {
+            Tone::Near => Some(RAMP_NEAR),
+            Tone::Ink => Some(RAMP_INK),
+            _ => None,
+        }
+    }
+
+    pub fn is_ramp(self) -> bool {
+        self.ramp().is_some()
+    }
+
     pub fn hue(self) -> f32 {
         match self {
+            Tone::Near | Tone::Ink => 0.0,
             Tone::Green => 150.0,
             Tone::Blue => 250.0,
             Tone::Purple => 300.0,
@@ -180,21 +270,21 @@ impl Tone {
         }
     }
 
+    /// OKLCH chroma, or `-id` for a Future-Retro ramp.
     pub fn chroma(self) -> f32 {
         match self {
+            Tone::Near => -(RAMP_NEAR as f32),
+            Tone::Ink => -(RAMP_INK as f32),
             Tone::Grey => 0.012,
             _ => 0.19,
         }
     }
 
     /// A color along this tone's ramp: `0.0` is near-black, `0.5` is the
-    /// signature color, `1.0` is a pale highlight.
+    /// signature color, `1.0` is a pale highlight. A Future-Retro ramp
+    /// returns its nearest fixed step.
     pub fn shade(self, level: f32) -> Rgba {
-        let level = level.clamp(0.0, 1.0);
-        let l = 0.22 + level * 0.72;
-        // Chroma peaks around the middle of the ramp and tapers at both ends.
-        let c = self.chroma() * (1.0 - (level - 0.55).abs() * 1.3).clamp(0.25, 1.0);
-        Rgba::oklch(l, c, self.hue())
+        shade_hc(self.hue(), self.chroma(), level)
     }
 
     /// The tone's signature color.
@@ -209,10 +299,14 @@ impl From<f32> for Tone {
     }
 }
 
-
-/// OKLCH shade of an arbitrary `(hue, chroma)` pair; the formula every
-/// shader port implements as `dk_shade`.
+/// Shade of an arbitrary `(hue, chroma)` pair; the formula every shader
+/// port implements as `shade`. A negative chroma names a Future-Retro ramp
+/// and returns the step nearest the level (shaders dither between steps).
 pub fn shade_hc(hue: f32, chroma: f32, level: f32) -> Rgba {
+    if chroma < 0.0 {
+        let p = ramp_position(level);
+        return ramp_color(-chroma as i32, (p.signum() * (p.abs() + 0.5).floor()) as i32);
+    }
     let level = level.clamp(0.0, 1.0);
     let l = 0.22 + level * 0.72;
     let c = chroma * (1.0 - (level - 0.55).abs() * 1.3).clamp(0.25, 1.0);

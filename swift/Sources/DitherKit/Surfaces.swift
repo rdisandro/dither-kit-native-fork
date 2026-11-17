@@ -18,7 +18,7 @@ public struct DitherGradient: View {
     public var gradient: DitherIR.Gradient
     public var cell: CGFloat
     public init(_ gradient: DitherIR.Gradient, cell: CGFloat = 3) { self.gradient = gradient; self.cell = cell }
-    public init(from: Tone, to: Tone? = nil, direction: Direction = .up, matrix: Matrix = .bayer8, density: Float = 1, cell: CGFloat = 3) {
+    public init(from: Tone = .near, to: Tone? = nil, direction: Direction = .up, matrix: Matrix = .bayer4, density: Float = 1, cell: CGFloat = 3) {
         var gradient = DitherIR.Gradient(from: from)
         gradient.to = to; gradient.direction = direction; gradient.matrix = matrix; gradient.density = density
         self.init(gradient, cell: cell)
@@ -28,23 +28,28 @@ public struct DitherGradient: View {
     }
 }
 
+/// A live field at film rate (24 fps). Its phase advances at the field's
+/// energy and quickens under the pointer; Reduce Motion shows one still frame.
 public struct DitherBackground: View {
     public var background: Background
+    public var energy: Energy
     public var speed: Float
     public var cell: CGFloat
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @Environment(\.ditherAnimationsEnabled) private var animationsEnabled
     private var reduceMotion: Bool { systemReduceMotion || !animationsEnabled }
-    @State private var epoch = Date()
-    public init(_ background: Background, speed: Float = 1, cell: CGFloat = 3) {
-        self.background = background; self.speed = speed; self.cell = cell
+    @State private var clock = FieldClock()
+    @State private var hovered = false
+    public init(_ background: Background = Background(field: .clouds, tone: .near), energy: Energy = .field, speed: Float = 1, cell: CGFloat = 3) {
+        self.background = background; self.energy = energy; self.speed = speed; self.cell = cell
     }
     public var body: some View {
-        TimelineView(.animation(paused: reduceMotion || speed == 0)) { context in
-            let time = reduceMotion ? Float(0) : Float(context.date.timeIntervalSince(epoch)) * speed
-            DitherSurface(cell: cell) { background.encode(w: $0, h: $1, time: time) }
+        TimelineView(.animation(minimumInterval: 1 / Motion.filmFPS, paused: reduceMotion || speed == 0)) { context in
+            let phase = reduceMotion ? Motion.stillPhase : clock.advance(to: context.date, hovered: hovered, energy: energy, speed: speed)
+            DitherSurface(cell: cell) { background.encode(w: $0, h: $1, time: phase) }
         }
-        .accessibilityLabel("Animated dither background")
+        .onHover { hovered = $0 }
+        .accessibilityHidden(true)
     }
 }
 
@@ -60,10 +65,12 @@ public struct DitherSwatch: View {
 public struct DitherAvatar: View {
     public var name: String
     public var hue: Float?
+    public var tone: Tone
     public var size: CGFloat
-    public init(_ name: String, hue: Float? = nil, size: CGFloat = 48) { self.name = name; self.hue = hue; self.size = size }
+    /// One pigment by default; pass `hue` for an upstream multi-hue identicon.
+    public init(_ name: String, tone: Tone = .near, hue: Float? = nil, size: CGFloat = 48) { self.name = name; self.tone = tone; self.hue = hue; self.size = size }
     public var body: some View {
-        DitherSurface(cell: max(size, 8) / 8) { _, _ in avatar(name: name, hue: hue) }
+        DitherSurface(cell: max(size, 8) / 8) { _, _ in hue.map { avatar(name: name, hue: $0) } ?? avatar(name: name, tone: tone) }
             .frame(width: max(size, 8), height: max(size, 8))
             .accessibilityLabel("Avatar for \(name)")
     }
@@ -79,15 +86,15 @@ public struct DitherMeter: View {
     @Environment(\.ditherAnimationsEnabled) private var animationsEnabled
     private var reduceMotion: Bool { systemReduceMotion || !animationsEnabled }
     @ScaledMetric private var barHeight = 24.0
-    public init(value: Float, tone: Tone = .green, fill: Fill = .gradient, label: String? = nil, cell: CGFloat = 3) {
+    public init(value: Float, tone: Tone = .near, fill: Fill = .matrix, label: String? = nil, cell: CGFloat = 3) {
         self.value = value; self.tone = tone; self.fill = fill; self.label = label; self.cell = cell
     }
     public var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let label { Text(label).font(.caption) }
+            if let label { Text(label).ditherLabel() }
             AnimatedDitherSurface(value: Double(value), cell: cell) { w, h, current in meter(w: w, h: h, value: Float(current), tone: tone, fill: fill) }
                 .frame(height: barHeight)
-                .animation(reduceMotion ? nil : .spring(response: 0.55, dampingFraction: 0.8), value: value)
+                .animation(reduceMotion ? nil : FutureRetro.reveal, value: value)
                 .accessibilityHidden(true)
         }
         .accessibilityElement(children: .ignore)
@@ -97,15 +104,62 @@ public struct DitherMeter: View {
 }
 
 /// Apply to a native `Button` to retain keyboard, focus, and VoiceOver behavior.
+/// Future-Retro tones draw the flat Near AI buttons (no texture, checker or
+/// sparkles); upstream tones keep dither-core's textured surface.
 public struct DitherButton: SwiftUI.ButtonStyle {
     public var tone: Tone
     public var style: DitherIR.ButtonStyle
     public var cell: CGFloat
-    public init(tone: Tone = .green, style: DitherIR.ButtonStyle = .solid, cell: CGFloat = 3) {
+    public init(tone: Tone = .near, style: DitherIR.ButtonStyle = .solid, cell: CGFloat = 3) {
         self.tone = tone; self.style = style; self.cell = cell
     }
-    public func makeBody(configuration: Configuration) -> some View {
-        DitherButtonBody(configuration: configuration, tone: tone, style: style, cell: cell)
+    @ViewBuilder public func makeBody(configuration: Configuration) -> some View {
+        if tone.isRamp {
+            FlatButtonBody(configuration: configuration, tone: tone, style: style)
+        } else {
+            DitherButtonBody(configuration: configuration, tone: tone, style: style, cell: cell)
+        }
+    }
+}
+
+/// Primary: flat pigment, void label, the tab bar's glow below. Secondary: a
+/// 1pt marble outline that fills marble on hover. Ghost: text with a 1pt
+/// pigment underline that turns blue on hover. Press nudges 1pt down.
+private struct FlatButtonBody: View {
+    let configuration: SwiftUI.ButtonStyleConfiguration
+    let tone: Tone
+    let style: DitherIR.ButtonStyle
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.ditherAnimationsEnabled) private var animationsEnabled
+    private var reduceMotion: Bool { systemReduceMotion || !animationsEnabled }
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovered = false
+    private var hot: Bool { hovered && isEnabled }
+    private var pressed: Bool { configuration.isPressed && isEnabled }
+    var body: some View {
+        let chrome = style.chrome(tone: tone, hovered: hot, pressed: pressed)
+        let shape = RoundedRectangle(cornerRadius: FutureRetro.controlRadius, style: .continuous)
+        let glow = ButtonChrome.glowGeometry(hovered: hot || pressed)
+        configuration.label
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(chrome.label.swiftUIColor)
+            .overlay(alignment: .bottom) {
+                if let underline = chrome.underline { Rectangle().fill(underline.swiftUIColor).frame(height: 1).offset(y: 4) }
+            }
+            .padding(.horizontal, style == .ghost ? 4 : 20).padding(.top, 13).padding(.bottom, 12)
+            .background {
+                if let color = chrome.glow {
+                    shape.fill(color.swiftUIColor).padding(.horizontal, 12).offset(y: CGFloat(glow.y)).blur(radius: CGFloat(glow.radius) / 2)
+                }
+            }
+            .background { if let fill = chrome.fill { shape.fill(fill.swiftUIColor) } }
+            .overlay { if let border = chrome.border { shape.strokeBorder(border.swiftUIColor, lineWidth: 1) } }
+            .contentShape(shape)
+            .opacity(isEnabled ? 1 : 0.45)
+            .offset(y: pressed && !reduceMotion ? 1 : 0)
+            .animation(reduceMotion ? nil : FutureRetro.quick, value: hot)
+            .animation(reduceMotion ? nil : FutureRetro.quick, value: pressed)
+            .onHover { hovered = $0 }
     }
 }
 
@@ -149,13 +203,13 @@ public struct DitherSparkline: View {
     private var reduceMotion: Bool { systemReduceMotion || !animationsEnabled }
     @State private var hovered = false
     @State private var appeared = false
-    public init(_ values: [Double], tone: Tone = .green, cell: CGFloat = 3) { self.values = values; self.tone = tone; self.cell = cell }
+    public init(_ values: [Double], tone: Tone = .near, cell: CGFloat = 3) { self.values = values; self.tone = tone; self.cell = cell }
     public var body: some View {
         AnimatedDitherSurface(value: (reduceMotion || appeared) ? 1 : 0, cell: cell) { w, h, progress in
             sparkline(values: values, tone: tone, w: w, h: h, hovered: hovered, progress: Float(progress))
         }
         .onHover { hovered = $0 }
-        .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.9)) { appeared = true } }
+        .onAppear { withAnimation(reduceMotion ? nil : FutureRetro.reveal) { appeared = true } }
         .accessibilityLabel("Sparkline")
         .accessibilityValue(values.map(formatValue).joined(separator: ", "))
     }
